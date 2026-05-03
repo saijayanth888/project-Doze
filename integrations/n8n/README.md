@@ -31,6 +31,7 @@ If `docker ps` still shows `5679->5678`, you have a **`docker-compose.override.y
 
    | Variable | Purpose |
    | -------- | ------- |
+   | `N8N_IMAGE` | Optional. Docker image for the n8n service (Compose default: `n8nio/n8n:latest`). Pin a version for reproducible upgrades. |
    | `N8N_ENCRYPTION_KEY` | **Required.** 32+ random chars (`openssl rand -hex 32`). |
    | `MODELFORGE_API_KEY` | Sent as `X-API-Key` from HTTP Request nodes (`$env.MODELFORGE_API_KEY`). |
    | `N8N_BASIC_AUTH_USER` / `N8N_BASIC_AUTH_PASSWORD` | Reverse-proxy style protection for the editor. |
