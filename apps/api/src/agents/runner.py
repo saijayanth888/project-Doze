@@ -130,11 +130,7 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     promoted=s.get("decision") == "promote",
                 )
 
-            evt = (
-                "champion_promoted"
-                if s.get("decision") == "promote"
-                else "generation_complete"
-            )
+            evt = "champion_promoted" if s.get("decision") == "promote" else "generation_complete"
             await post_evolution_event(
                 build_evolution_payload(
                     event_type=evt,
