@@ -1,0 +1,72 @@
+# ── Python ────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+.eggs/
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.tox/
+.pytype/
+
+# ── Node / frontend ───────────────────────────────────
+node_modules/
+dist/
+build/
+.next/
+.cache/
+.parcel-cache/
+.turbo/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Environment & secrets ─────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ── Runtime data ──────────────────────────────────────
+data/
+adapters/
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+hf_cache/
+
+# ── Editor / OS ───────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ── Docker ────────────────────────────────────────────
+.docker/
+docker-compose.override.yml
+
+# ── Misc ──────────────────────────────────────────────
+.claude/
+*.bak
+*.tmp

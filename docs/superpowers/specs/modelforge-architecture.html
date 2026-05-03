@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ModelForge — Architecture</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@300;500;700;900&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0a0e17;
+    color: #e0e6f0;
+    font-family: 'Outfit', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Subtle grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(56, 189, 248, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(56, 189, 248, 0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 40px 24px;
+  }
+
+  /* Header */
+  .header {
+    text-align: center;
+    margin-bottom: 48px;
+  }
+  .header h1 {
+    font-size: 2.8rem;
+    font-weight: 900;
+    background: linear-gradient(135deg, #38bdf8, #818cf8, #c084fc);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: -1px;
+  }
+  .header p {
+    font-size: 1rem;
+    color: #64748b;
+    margin-top: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+  }
+
+  /* Main layout: two columns */
+  .arch-grid {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 32px;
+    align-items: start;
+  }
+
+  /* ─── Left Column: Laptop ─── */
+  .laptop-col {
+    position: sticky;
+    top: 40px;
+  }
+  .device-card {
+    background: linear-gradient(145deg, #131a2b, #0f1523);
+    border: 1px solid #1e293b;
+    border-radius: 16px;
+    padding: 24px;
+    position: relative;
+    overflow: hidden;
+  }
+  .device-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #38bdf8, #818cf8);
+  }
+  .device-icon {
+    font-size: 2.4rem;
+    margin-bottom: 12px;
+  }
+  .device-card h2 {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    margin-bottom: 4px;
+  }
+  .device-card .subtitle {
+    font-size: 0.75rem;
+    color: #64748b;
+    font-family: 'JetBrains Mono', monospace;
+    margin-bottom: 16px;
+  }
+  .tool-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .tool-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: rgba(56, 189, 248, 0.05);
+    border: 1px solid rgba(56, 189, 248, 0.1);
+    border-radius: 10px;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+  }
+  .tool-item:hover {
+    background: rgba(56, 189, 248, 0.1);
+    border-color: rgba(56, 189, 248, 0.25);
+    transform: translateX(4px);
+  }
+  .tool-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* Connection line */
+  .connection-strip {
+    margin-top: 20px;
+    text-align: center;
+    position: relative;
+  }
+  .conn-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: #38bdf8;
+    background: #0a0e17;
+    padding: 4px 12px;
+    border: 1px solid rgba(56, 189, 248, 0.3);
+    border-radius: 20px;
+    display: inline-block;
+    margin: 4px 0;
+  }
+  .conn-arrow {
+    color: #38bdf8;
+    font-size: 1.2rem;
+    line-height: 1;
+  }
+
+  /* ─── Right Column: DGX Spark ─── */
+  .spark-col {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .spark-header {
+    background: linear-gradient(145deg, #131a2b, #0f1523);
+    border: 1px solid #1e293b;
+    border-radius: 16px;
+    padding: 24px 28px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    position: relative;
+    overflow: hidden;
+  }
+  .spark-header::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #76b900, #38bdf8);
+  }
+  .spark-specs {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  .spec-chip {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    padding: 4px 10px;
+    background: rgba(118, 185, 0, 0.1);
+    border: 1px solid rgba(118, 185, 0, 0.25);
+    border-radius: 6px;
+    color: #76b900;
+  }
+
+  /* Service layers inside DGX */
+  .layer {
+    background: linear-gradient(145deg, #131a2b, #0f1523);
+    border: 1px solid #1e293b;
+    border-radius: 16px;
+    padding: 20px;
+    position: relative;
+  }
+  .layer-label {
+    position: absolute;
+    top: -10px;
+    left: 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: #64748b;
+    background: #0f1523;
+    padding: 2px 10px;
+    border-radius: 4px;
+    border: 1px solid #1e293b;
+  }
+
+  .services-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+
+  .service-box {
+    flex: 1;
+    min-width: 140px;
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px solid;
+    position: relative;
+    transition: all 0.25s;
+  }
+  .service-box:hover {
+    transform: translateY(-3px);
+  }
+  .service-box .svc-icon { font-size: 1.6rem; margin-bottom: 8px; }
+  .service-box h3 { font-size: 0.95rem; font-weight: 700; margin-bottom: 2px; }
+  .service-box .port {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    opacity: 0.6;
+  }
+  .service-box p {
+    font-size: 0.75rem;
+    color: #94a3b8;
+    margin-top: 6px;
+    line-height: 1.4;
+  }
+
+  /* Color themes for service boxes */
+  .svc-blue { background: rgba(56, 189, 248, 0.06); border-color: rgba(56, 189, 248, 0.2); }
+  .svc-blue h3 { color: #38bdf8; }
+  .svc-purple { background: rgba(129, 140, 248, 0.06); border-color: rgba(129, 140, 248, 0.2); }
+  .svc-purple h3 { color: #818cf8; }
+  .svc-green { background: rgba(118, 185, 0, 0.06); border-color: rgba(118, 185, 0, 0.2); }
+  .svc-green h3 { color: #76b900; }
+  .svc-orange { background: rgba(251, 146, 60, 0.06); border-color: rgba(251, 146, 60, 0.2); }
+  .svc-orange h3 { color: #fb923c; }
+  .svc-pink { background: rgba(244, 114, 182, 0.06); border-color: rgba(244, 114, 182, 0.2); }
+  .svc-pink h3 { color: #f472b6; }
+  .svc-teal { background: rgba(45, 212, 191, 0.06); border-color: rgba(45, 212, 191, 0.2); }
+  .svc-teal h3 { color: #2dd4bf; }
+  .svc-yellow { background: rgba(250, 204, 21, 0.06); border-color: rgba(250, 204, 21, 0.2); }
+  .svc-yellow h3 { color: #facc15; }
+  .svc-red { background: rgba(248, 113, 113, 0.06); border-color: rgba(248, 113, 113, 0.2); }
+  .svc-red h3 { color: #f87171; }
+
+  /* Evolution Loop — the hero section */
+  .evo-loop {
+    background: linear-gradient(145deg, #0f172a, #131a2b);
+    border: 2px solid rgba(129, 140, 248, 0.3);
+    border-radius: 20px;
+    padding: 28px;
+    position: relative;
+    overflow: hidden;
+  }
+  .evo-loop::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #818cf8, #c084fc, #f472b6, #fb923c, #facc15, #76b900, #38bdf8, #818cf8);
+    background-size: 200% 100%;
+    animation: shimmer 3s linear infinite;
+  }
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  .evo-steps {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+  .evo-step {
+    text-align: center;
+    padding: 12px 8px;
+    border-radius: 10px;
+    flex: 1;
+    min-width: 90px;
+    transition: all 0.3s;
+    cursor: default;
+  }
+  .evo-step:hover {
+    background: rgba(129, 140, 248, 0.1);
+    transform: scale(1.05);
+  }
+  .evo-step .step-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    color: #64748b;
+    margin-bottom: 4px;
+  }
+  .evo-step .step-icon { font-size: 1.5rem; margin-bottom: 4px; }
+  .evo-step .step-name {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #e2e8f0;
+  }
+  .evo-arrow {
+    color: #475569;
+    font-size: 1rem;
+    flex-shrink: 0;
+  }
+  .evo-loop-back {
+    text-align: center;
+    margin-top: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: #818cf8;
+  }
+
+  /* Data stores row */
+  .stores-row {
+    display: flex;
+    gap: 12px;
+  }
+  .store-box {
+    flex: 1;
+    padding: 14px 16px;
+    background: rgba(250, 204, 21, 0.04);
+    border: 1px solid rgba(250, 204, 21, 0.15);
+    border-radius: 12px;
+    text-align: center;
+  }
+  .store-box .store-icon { font-size: 1.3rem; }
+  .store-box h4 { font-size: 0.8rem; color: #facc15; margin-top: 4px; }
+  .store-box p { font-size: 0.65rem; color: #64748b; font-family: 'JetBrains Mono', monospace; }
+
+  /* Flow arrows between layers */
+  .flow-connector {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 4px 0;
+    color: #334155;
+    font-size: 0.7rem;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .flow-connector .arrow { color: #475569; font-size: 1.2rem; }
+  .flow-connector .flow-label {
+    color: #475569;
+    font-size: 0.65rem;
+    letter-spacing: 1px;
+  }
+
+  /* Patent callout */
+  .patent-strip {
+    margin-top: 32px;
+    padding: 16px 24px;
+    background: linear-gradient(90deg, rgba(244, 114, 182, 0.08), rgba(129, 140, 248, 0.08));
+    border: 1px dashed rgba(244, 114, 182, 0.3);
+    border-radius: 12px;
+    display: flex;
+    align-items: start;
+    gap: 12px;
+  }
+  .patent-strip .pat-icon { font-size: 1.4rem; flex-shrink: 0; }
+  .patent-strip h4 { font-size: 0.85rem; color: #f472b6; }
+  .patent-strip p { font-size: 0.75rem; color: #94a3b8; line-height: 1.5; margin-top: 4px; }
+
+  /* Responsive */
+  @media (max-width: 900px) {
+    .arch-grid { grid-template-columns: 1fr; }
+    .laptop-col { position: static; }
+    .connection-strip { display: none; }
+    .evo-steps { gap: 2px; }
+    .evo-step { min-width: 70px; padding: 8px 4px; }
+    .evo-arrow { display: none; }
+    .header h1 { font-size: 2rem; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>ModelForge</h1>
+    <p>self-evolving LLM platform // architecture v1.0</p>
+  </div>
+
+  <div class="arch-grid">
+    <!-- ═══ LEFT: Laptop ═══ -->
+    <div class="laptop-col">
+      <div class="device-card">
+        <div class="device-icon">💻</div>
+        <h2>Your Laptop</h2>
+        <div class="subtitle">Development Interface</div>
+        <ul class="tool-list">
+          <li class="tool-item">
+            <span class="tool-dot" style="background:#38bdf8"></span>
+            Cursor IDE (Remote SSH)
+          </li>
+          <li class="tool-item">
+            <span class="tool-dot" style="background:#c084fc"></span>
+            Claude Code Desktop
+          </li>
+          <li class="tool-item">
+            <span class="tool-dot" style="background:#76b900"></span>
+            NVIDIA Sync
+          </li>
+          <li class="tool-item">
+            <span class="tool-dot" style="background:#f472b6"></span>
+            React Dashboard (:3000)
+          </li>
+          <li class="tool-item">
+            <span class="tool-dot" style="background:#fb923c"></span>
+            Tailscale VPN
+          </li>
+        </ul>
+
+        <div class="connection-strip">
+          <div class="conn-arrow">↕</div>
+          <div class="conn-label">SSH + Tailscale</div>
+          <div class="conn-arrow">↕</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ RIGHT: DGX Spark ═══ -->
+    <div class="spark-col">
+
+      <!-- Spark Device Header -->
+      <div class="spark-header">
+        <div style="flex-shrink:0">
+          <div class="device-icon">🟢</div>
+          <h2 style="font-size:1.3rem;font-weight:900;color:#76b900">DGX Spark</h2>
+        </div>
+        <div>
+          <div class="subtitle" style="margin-bottom:8px">NVIDIA GB10 Grace Blackwell Superchip</div>
+          <div class="spark-specs">
+            <span class="spec-chip">128 GB Unified RAM</span>
+            <span class="spec-chip">1 PFLOP FP4</span>
+            <span class="spec-chip">4 TB SSD</span>
+            <span class="spec-chip">20 ARM Cores</span>
+            <span class="spec-chip">273 GB/s BW</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Layer 1: Frontend + API -->
+      <div class="layer">
+        <div class="layer-label">Application Layer</div>
+        <div class="services-row">
+          <div class="service-box svc-pink">
+            <div class="svc-icon">⚛️</div>
+            <h3>React Frontend</h3>
+            <div class="port">:3000</div>
+            <p>Dashboard, lineage tree, training monitor, model comparison UI</p>
+          </div>
+          <div class="service-box svc-blue">
+            <div class="svc-icon">⚡</div>
+            <h3>FastAPI</h3>
+            <div class="port">:8000</div>
+            <p>REST + WebSocket API, GPU monitoring, evolution control</p>
+          </div>
+          <div class="service-box svc-orange">
+            <div class="svc-icon">🔄</div>
+            <h3>n8n</h3>
+            <div class="port">:5678</div>
+            <p>Scheduled runs, triggers, Slack/email notifications</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-connector">
+        <span class="arrow">▼</span>
+        <span class="flow-label">REST / WebSocket / Webhooks</span>
+        <span class="arrow">▼</span>
+      </div>
+
+      <!-- Layer 2: Evolution Engine (Hero) -->
+      <div class="evo-loop">
+        <div class="layer-label" style="border-color:rgba(129,140,248,0.3);color:#818cf8">⭐ Evolution Engine — LangGraph Agent</div>
+        <div class="evo-steps">
+          <div class="evo-step">
+            <div class="step-num">01</div>
+            <div class="step-icon">📊</div>
+            <div class="step-name">Evaluate</div>
+          </div>
+          <div class="evo-arrow">→</div>
+          <div class="evo-step">
+            <div class="step-num">02</div>
+            <div class="step-icon">🔍</div>
+            <div class="step-name">Identify</div>
+          </div>
+          <div class="evo-arrow">→</div>
+          <div class="evo-step">
+            <div class="step-num">03</div>
+            <div class="step-icon">📚</div>
+            <div class="step-name">Curate</div>
+          </div>
+          <div class="evo-arrow">→</div>
+          <div class="evo-step">
+            <div class="step-num">04</div>
+            <div class="step-icon">🏋️</div>
+            <div class="step-name">Train</div>
+          </div>
+          <div class="evo-arrow">→</div>
+          <div class="evo-step">
+            <div class="step-num">05</div>
+            <div class="step-icon">⚖️</div>
+            <div class="step-name">Compare</div>
+          </div>
+          <div class="evo-arrow">→</div>
+          <div class="evo-step">
+            <div class="step-num">06</div>
+            <div class="step-icon">👑</div>
+            <div class="step-name">Promote</div>
+          </div>
+        </div>
+        <div class="evo-loop-back">↻ autonomous loop — repeats until convergence</div>
+      </div>
+
+      <div class="flow-connector">
+        <span class="arrow">▼</span>
+        <span class="flow-label">Model Serving / Training Calls</span>
+        <span class="arrow">▼</span>
+      </div>
+
+      <!-- Layer 3: ML Services -->
+      <div class="layer">
+        <div class="layer-label">ML Runtime Layer</div>
+        <div class="services-row">
+          <div class="service-box svc-green">
+            <div class="svc-icon">🦙</div>
+            <h3>Ollama</h3>
+            <div class="port">:11434</div>
+            <p>Dev inference, self-analysis, synthetic data generation</p>
+          </div>
+          <div class="service-box svc-teal">
+            <div class="svc-icon">🚀</div>
+            <h3>vLLM</h3>
+            <div class="port">:8001 (on-demand)</div>
+            <p>Batched eval runs, benchmark scoring, parent vs child</p>
+          </div>
+          <div class="service-box svc-purple">
+            <div class="svc-icon">🏋️</div>
+            <h3>TRL + PEFT</h3>
+            <div class="port">DeepSpeed</div>
+            <p>LoRA fine-tuning, adapter training, child model creation</p>
+          </div>
+          <div class="service-box svc-red">
+            <div class="svc-icon">🤗</div>
+            <h3>Hugging Face</h3>
+            <div class="port">Hub + Datasets</div>
+            <p>Model downloads, dataset sourcing, adapter registry</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-connector">
+        <span class="arrow">▼</span>
+        <span class="flow-label">Read / Write</span>
+        <span class="arrow">▼</span>
+      </div>
+
+      <!-- Layer 4: Data Stores -->
+      <div class="layer">
+        <div class="layer-label">Storage Layer</div>
+        <div class="services-row">
+          <div class="store-box">
+            <div class="store-icon">🐘</div>
+            <h4>PostgreSQL + pgvector</h4>
+            <p>Lineage, scores, embeddings, vector search</p>
+          </div>
+          <div class="store-box">
+            <div class="store-icon">📦</div>
+            <h4>Model Store</h4>
+            <p>~/models — base models + LoRA adapters</p>
+          </div>
+          <div class="store-box">
+            <div class="store-icon">📊</div>
+            <h4>Training Data</h4>
+            <p>~/data — curated datasets per generation</p>
+          </div>
+          <div class="store-box">
+            <div class="store-icon">📈</div>
+            <h4>W&B</h4>
+            <p>Experiment tracking + metrics</p>
+          </div>
+          <div class="store-box">
+            <div class="store-icon">⏱️</div>
+            <h4>Redis</h4>
+            <p>Job queue between n8n ↔ LangGraph</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Patent callout -->
+      <div class="patent-strip">
+        <div class="pat-icon">🔒</div>
+        <div>
+          <h4>Patentable IP Surface</h4>
+          <p>
+            The Evolution Engine (LangGraph agent loop) is the core IP — specifically:
+            the self-evaluation mechanism, weakness-targeted data curation,
+            autonomous LoRA spawning, fitness-based promotion/discard logic,
+            and multi-generational lineage tracking. File provisional before open-sourcing.
+          </p>
+        </div>
+      </div>
+
+    </div><!-- /spark-col -->
+  </div><!-- /arch-grid -->
+</div>
+</body>
+</html>

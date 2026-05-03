@@ -1,0 +1,46 @@
+export const C = {
+  bg:    '#06080d',
+  bgS:   '#0c1018',
+  bgC:   '#111827',
+  bgE:   '#1a2235',
+  bgI:   '#0f1623',
+  acc:   '#76b900',
+  accDim:'rgba(118,185,0,0.15)',
+  accGlow:'rgba(118,185,0,0.35)',
+  ind:   '#818cf8',
+  indDim:'rgba(129,140,248,0.15)',
+  evo:   'linear-gradient(135deg,#818cf8,#c084fc,#f472b6)',
+  txtP:  '#f1f5f9',
+  txtS:  '#94a3b8',
+  txtM:  '#475569',
+  success:'#22c55e',
+  successDim:'rgba(34,197,94,0.15)',
+  warning:'#f59e0b',
+  warningDim:'rgba(245,158,11,0.15)',
+  danger: '#ef4444',
+  dangerDim:'rgba(239,68,68,0.15)',
+  info:   '#38bdf8',
+  border: '#1e293b',
+  borderL:'#273347',
+  borderA:'rgba(118,185,0,0.3)',
+  borderI:'rgba(129,140,248,0.3)',
+  gold:  '#d4a574',
+  goldDim:'rgba(212,165,116,0.12)',
+  goldBorder:'rgba(212,165,116,0.3)',
+  purple:'#c084fc',
+  pink:  '#f472b6',
+};
+
+export const F = {
+  display: "'Instrument Serif', Georgia, serif",
+  ui:      "'Outfit', 'Helvetica Neue', sans-serif",
+  mono:    "'JetBrains Mono', 'Menlo', monospace",
+};
+
+export const BENCH_COLORS = {
+  mmlu:         '#76b900',
+  arc_challenge:'#818cf8',
+  hellaswag:    '#38bdf8',
+  gsm8k:        '#f59e0b',
+  humaneval:    '#f472b6',
+};

@@ -1,0 +1,18 @@
+# Runtime dependencies for the FastAPI backend on Python 3.13.
+# Optional GPU-only deps (torch, peft, trl, lm-eval, sentence-transformers,
+# wandb) are listed in pyproject.toml under the [project.optional-dependencies]
+# `gpu` extra and should only be installed on the DGX Spark host.
+
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+pydantic-settings==2.6.1
+asyncpg==0.30.0
+httpx==0.28.1
+python-dotenv==1.0.1
+redis==5.2.1
+langgraph==0.2.62
+langchain-core==0.3.28
+structlog==24.4.0
+pgvector==0.3.6
+filelock==3.16.1
