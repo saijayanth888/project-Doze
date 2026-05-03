@@ -61,6 +61,8 @@ class Settings(BaseSettings):
         default=None,
         alias="N8N_WEBHOOK_EVOLUTION_URL",
     )
+    # Optional HMAC for evolution webhook (shared with n8n Code node / $env.N8N_WEBHOOK_SECRET).
+    n8n_webhook_secret: str | None = Field(default=None, alias="N8N_WEBHOOK_SECRET")
 
     # ── External APIs (optional) ───────────────────────
     hf_token: str | None = None

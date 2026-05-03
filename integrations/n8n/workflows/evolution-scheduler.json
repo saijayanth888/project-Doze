@@ -1,30 +1,65 @@
 {
-  "createdAt": "2026-05-03T15:03:43.325Z",
-  "updatedAt": "2026-05-03T15:12:51.620Z",
-  "id": "xEDTHPst9Vb9h6sU",
   "name": "Evolution Scheduler",
-  "active": true,
-  "isArchived": false,
+  "active": false,
   "nodes": [
     {
       "parameters": {
         "rule": {
-          "interval": [
-            {
-              "field": "hours",
-              "hoursInterval": 6
-            }
-          ]
+          "interval": [{ "field": "hours", "hoursInterval": 6 }]
         }
       },
       "id": "schedule-trigger",
       "name": "Every 6 Hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [
-        240,
-        300
-      ]
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/evolve/status",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-API-Key", "value": "={{ $env.MODELFORGE_API_KEY }}" }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "get-evolve-status",
+      "name": "GET Evolve Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "running",
+              "leftValue": "={{ $json.is_running }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-evolve-running",
+      "name": "Evolution Already Running?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {},
+      "id": "skip-overlap",
+      "name": "Skip Overlap",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [900, 160]
     },
     {
       "parameters": {
@@ -33,10 +68,7 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {
-              "name": "X-API-Key",
-              "value": "={{ $env.MODELFORGE_API_KEY }}"
-            }
+            { "name": "X-API-Key", "value": "={{ $env.MODELFORGE_API_KEY }}" }
           ]
         },
         "options": {}
@@ -45,43 +77,28 @@
       "name": "GET GPU Status",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        460,
-        300
-      ]
+      "position": [900, 380]
     },
     {
       "parameters": {
         "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
           "conditions": [
             {
               "id": "gpu-check",
               "leftValue": "={{ $json.gpu_available }}",
               "rightValue": true,
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
             }
           ],
           "combinator": "and"
-        },
-        "options": {}
+        }
       },
       "id": "if-gpu-available",
       "name": "GPU Available?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [
-        680,
-        300
-      ]
+      "position": [1120, 380]
     },
     {
       "parameters": {
@@ -90,29 +107,20 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            },
-            {
-              "name": "X-API-Key",
-              "value": "={{ $env.MODELFORGE_API_KEY }}"
-            }
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-API-Key", "value": "={{ $env.MODELFORGE_API_KEY }}" }
           ]
         },
         "sendBody": true,
         "contentType": "json",
-        "jsonBody": "={\n  \"base_model\": \"meta-llama/Llama-3.1-8B-Instruct\",\n  \"max_generations\": 5\n}",
+        "jsonBody": "={{ JSON.stringify({ base_model: $env.EVOLUTION_BASE_MODEL || 'llama3.2:3b', max_generations: Number($env.EVOLUTION_MAX_GENS || 10) }) }}",
         "options": {}
       },
       "id": "start-evolution",
       "name": "POST Start Evolution",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        900,
-        200
-      ]
+      "position": [1340, 280]
     },
     {
       "parameters": {},
@@ -120,130 +128,33 @@
       "name": "No GPU (Mac Dev Mode)",
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
-      "position": [
-        900,
-        420
-      ]
+      "position": [1340, 480]
     }
   ],
   "connections": {
     "Every 6 Hours": {
+      "main": [[{ "node": "GET Evolve Status", "type": "main", "index": 0 }]]
+    },
+    "GET Evolve Status": {
+      "main": [[{ "node": "Evolution Already Running?", "type": "main", "index": 0 }]]
+    },
+    "Evolution Already Running?": {
       "main": [
-        [
-          {
-            "node": "GET GPU Status",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Skip Overlap", "type": "main", "index": 0 }],
+        [{ "node": "GET GPU Status", "type": "main", "index": 0 }]
       ]
     },
     "GET GPU Status": {
-      "main": [
-        [
-          {
-            "node": "GPU Available?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "GPU Available?", "type": "main", "index": 0 }]]
     },
     "GPU Available?": {
       "main": [
-        [
-          {
-            "node": "POST Start Evolution",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "No GPU (Mac Dev Mode)",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "POST Start Evolution", "type": "main", "index": 0 }],
+        [{ "node": "No GPU (Mac Dev Mode)", "type": "main", "index": 0 }]
       ]
     }
   },
-  "settings": {
-    "executionOrder": "v1"
-  },
-  "staticData": {
-    "node:Every 6 Hours": {
-      "recurrenceRules": []
-    }
-  },
-  "meta": null,
-  "pinData": null,
-  "versionId": "29f27d54-4af8-4110-b388-c63f3d4f386d",
-  "triggerCount": 1,
-  "shared": [
-    {
-      "createdAt": "2026-05-03T15:03:43.325Z",
-      "updatedAt": "2026-05-03T15:03:43.325Z",
-      "role": "workflow:owner",
-      "workflowId": "xEDTHPst9Vb9h6sU",
-      "projectId": "pCXiSbORL8ggyach",
-      "project": {
-        "createdAt": "2026-05-03T15:01:46.271Z",
-        "updatedAt": "2026-05-03T15:02:06.125Z",
-        "id": "pCXiSbORL8ggyach",
-        "name": "Model Forge <admin@modelforge.local>",
-        "type": "personal",
-        "icon": null,
-        "description": null,
-        "projectRelations": [
-          {
-            "createdAt": "2026-05-03T15:01:46.271Z",
-            "updatedAt": "2026-05-03T15:01:46.271Z",
-            "role": "project:personalOwner",
-            "userId": "fbbcca9f-40d6-4aa2-9382-1a8d501d89b6",
-            "projectId": "pCXiSbORL8ggyach",
-            "user": {
-              "createdAt": "2026-05-03T15:01:46.029Z",
-              "updatedAt": "2026-05-03T15:15:37.875Z",
-              "id": "fbbcca9f-40d6-4aa2-9382-1a8d501d89b6",
-              "email": "admin@modelforge.local",
-              "firstName": "Model",
-              "lastName": "Forge",
-              "personalizationAnswers": {
-                "version": "v4",
-                "personalization_survey_submitted_at": "2026-05-03T15:07:53.732Z",
-                "personalization_survey_n8n_version": "1.102.4",
-                "companyIndustryExtended": [
-                  "it-industry"
-                ],
-                "companyType": "other"
-              },
-              "settings": {
-                "userActivated": true,
-                "firstSuccessfulWorkflowId": "p1psmWso6gdVfK39",
-                "userActivatedAt": 1777821337859
-              },
-              "role": "global:owner",
-              "disabled": false,
-              "mfaEnabled": false,
-              "lastActiveAt": "2026-05-03",
-              "isPending": false
-            }
-          }
-        ]
-      }
-    }
-  ],
-  "tags": [],
-  "parentFolder": null,
-  "scopes": [
-    "workflow:create",
-    "workflow:delete",
-    "workflow:execute",
-    "workflow:list",
-    "workflow:move",
-    "workflow:read",
-    "workflow:share",
-    "workflow:update"
-  ]
+  "settings": { "executionOrder": "v1" },
+  "staticData": { "node:Every 6 Hours": { "recurrenceRules": [] } },
+  "meta": { "templateCredsSetupCompleted": true }
 }

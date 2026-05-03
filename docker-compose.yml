@@ -44,7 +44,7 @@ services:
     restart: unless-stopped
 
   n8n:
-    image: n8nio/n8n:latest
+    image: n8nio/n8n:1.78.0
     container_name: mf-n8n
     ports:
       # Host 5679 if 5678 is already taken (adjust N8N_WEBHOOK_URL for generated links).
@@ -69,11 +69,20 @@ services:
       # Exposed to workflow expressions as $env.MODELFORGE_API_KEY
       - MODELFORGE_API_KEY=${MODELFORGE_API_KEY:-}
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      - N8N_WEBHOOK_SECRET=${N8N_WEBHOOK_SECRET:-}
+      - EVOLUTION_BASE_MODEL=${EVOLUTION_BASE_MODEL:-llama3.2:3b}
+      - EVOLUTION_MAX_GENS=${EVOLUTION_MAX_GENS:-10}
     volumes:
       - n8n_data:/home/node/.n8n
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5678/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
     restart: unless-stopped
 
   api:
@@ -89,6 +98,7 @@ services:
       OLLAMA_HOST: http://ollama:11434
       VLLM_HOST: http://vllm:8000
       N8N_WEBHOOK_EVOLUTION_URL: "${N8N_WEBHOOK_EVOLUTION_URL:-http://n8n:5678/webhook/evolution-events}"
+      N8N_WEBHOOK_SECRET: "${N8N_WEBHOOK_SECRET:-}"
     expose:
       - "8000"
     ports:

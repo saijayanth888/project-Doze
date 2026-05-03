@@ -164,6 +164,74 @@ body {
   color: inherit;
 }
 
+/* ── Design system: buttons (ModelForge handoff) ── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-family: var(--font-ui);
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  border: 1px solid transparent;
+  text-decoration: none;
+  white-space: nowrap;
+  outline: none;
+  background: transparent;
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.btn--primary {
+  background: var(--accent-primary);
+  color: #000;
+  border-color: var(--accent-primary);
+}
+.btn--primary:hover:not(:disabled) {
+  filter: brightness(1.12);
+  box-shadow: var(--shadow-glow-green);
+}
+.btn--secondary {
+  background: transparent;
+  color: var(--accent-primary);
+  border-color: var(--border-accent);
+}
+.btn--secondary:hover:not(:disabled) {
+  background: var(--accent-primary-dim);
+  box-shadow: var(--shadow-glow-green);
+}
+.btn--ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: var(--border);
+}
+.btn--ghost:hover:not(:disabled) {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-color: var(--border-light);
+}
+.btn--danger {
+  background: var(--danger-dim);
+  color: var(--danger);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+.btn--danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: #fff;
+}
+.btn--sm { padding: 4px 12px; font-size: 0.75rem; }
+.btn--lg { padding: 12px 24px; font-size: 1rem; }
+.btn--xl { padding: 14px 32px; font-size: 1.125rem; font-weight: 600; }
+
 @media (prefers-reduced-motion: reduce) {
   *,*::before,*::after { animation: none !important; transition: none !important; }
   .mf-card-hover:active,

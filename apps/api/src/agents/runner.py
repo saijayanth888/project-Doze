@@ -131,6 +131,10 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                 )
 
             evt = "champion_promoted" if s.get("decision") == "promote" else "generation_complete"
+            base_model = str((config or {}).get("base_model") or "unknown")
+            dur = float(s.get("training_seconds", 0.0) or 0.0) + float(
+                s.get("eval_seconds", 0.0) or 0.0
+            )
             await post_evolution_event(
                 build_evolution_payload(
                     event_type=evt,
@@ -141,6 +145,9 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     child_scores=s.get("child_scores"),
                     champion_avg=s.get("champion_avg"),
                     step="promote_or_discard",
+                    total_generations=int(s.get("max_generations", 0) or 0),
+                    duration_seconds=dur or None,
+                    champion_model_id=f"{base_model}@gen{s['generation']}",
                 )
             )
 
@@ -162,6 +169,10 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
             )
         else:
             await db.complete_run(run_id)
+            fc = final.get("config") or {}
+            if not isinstance(fc, dict):
+                fc = {}
+            base_model = str(fc.get("base_model") or "unknown")
             await post_evolution_event(
                 build_evolution_payload(
                     event_type="run_complete",
@@ -170,6 +181,10 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     champion_avg=float(final.get("champion_avg", 0.0)),
                     child_scores=final.get("child_scores"),
                     step="complete",
+                    total_generations=int(final.get("generation", 0) or 0),
+                    duration_seconds=float(final.get("training_seconds", 0.0) or 0.0)
+                    + float(final.get("eval_seconds", 0.0) or 0.0),
+                    champion_model_id=f"{base_model}@gen{int(final.get('generation', 0) or 0)}",
                 )
             )
         logger.info(

@@ -31,7 +31,7 @@ async def get_evolution_aggregate_status(
     """Single poll endpoint for the dashboard (active run or latest completed / idle)."""
     run = await db.get_dashboard_run()
     if run is None:
-        return EvolutionPollStatus()
+        return EvolutionPollStatus(is_running=False)
 
     config = run.get("config") or {}
     if isinstance(config, str):
@@ -50,12 +50,15 @@ async def get_evolution_aggregate_status(
     st = str(run.get("status", "unknown"))
     if st in ("completed", "failed", "stopped"):
         poll_status = "idle"
+        is_running = False
     else:
         poll_status = "running"
+        is_running = True
 
     return EvolutionPollStatus(
         run_id=run.get("run_id"),
         status=poll_status,
+        is_running=is_running,
         generation=int(run.get("current_generation", 0) or 0),
         current_step=run.get("current_step"),
         started_at=started if isinstance(started, datetime) else None,

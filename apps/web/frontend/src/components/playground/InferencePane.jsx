@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Send, RotateCcw, Zap } from 'lucide-react';
+import { RotateCcw, Zap, Trophy } from 'lucide-react';
 import { apiFetch } from '../../config/api';
 import DNALoader from '../shared/DNALoader';
 import MagneticButton from '../shared/MagneticButton';
@@ -52,22 +52,30 @@ export default function InferencePane() {
     setLoading(true);
     setSubmitted(false);
     setResponses({ base: '', champion: '' });
-
-    const result = await apiFetch('/infer', {
-      method: 'POST',
-      body: JSON.stringify({ prompt }),
-    });
-
-    if (result) {
-      setResponses({ base: result.base || MOCK_RESPONSES.base, champion: result.champion || MOCK_RESPONSES.champion });
-    } else {
-      setResponses({
-        base: `[Mock] ${MOCK_RESPONSES.base} Prompt: "${prompt.slice(0, 50)}..."`,
-        champion: `[Mock] ${MOCK_RESPONSES.champion} Prompt: "${prompt.slice(0, 50)}..."`,
+    try {
+      const result = await apiFetch('/api/infer', {
+        method: 'POST',
+        body: JSON.stringify({ prompt }),
       });
+
+      if (result) {
+        setResponses({ base: result.base || MOCK_RESPONSES.base, champion: result.champion || MOCK_RESPONSES.champion });
+      } else {
+        setResponses({
+          base: `[Mock] ${MOCK_RESPONSES.base} Prompt: "${prompt.slice(0, 50)}..."`,
+          champion: `[Mock] ${MOCK_RESPONSES.champion} Prompt: "${prompt.slice(0, 50)}..."`,
+        });
+      }
+      setSubmitted(true);
+    } catch {
+      setResponses({
+        base: 'Request failed. Check API key and that the API is running.',
+        champion: 'Request failed. Check API key and that the API is running.',
+      });
+      setSubmitted(true);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-    setSubmitted(true);
   }
 
   function handleKeyDown(e) {
@@ -114,7 +122,11 @@ export default function InferencePane() {
             {EXAMPLE_PROMPTS.map((p, i) => (
               <button
                 key={i}
-                onClick={() => setPrompt(p)}
+                type="button"
+                onClick={() => {
+                  setPrompt(p);
+                  textareaRef.current?.focus();
+                }}
                 style={{
                   padding: '4px 10px',
                   background: 'transparent',
@@ -198,7 +210,7 @@ export default function InferencePane() {
                   <div style={{ fontSize: 10, fontFamily: 'JetBrains Mono', color, letterSpacing: 1 }}>{label}</div>
                   <div style={{ fontSize: 12, color: '#64748b', fontFamily: 'Outfit', marginTop: 2 }}>{subtitle}</div>
                 </div>
-                {crown && <span style={{ fontSize: 20, animation: 'crown-float 3s ease-in-out infinite' }}>👑</span>}
+                {crown && <Trophy size={18} color={color} style={{ animation: 'crown-float 3s ease-in-out infinite' }} aria-hidden />}
               </div>
               <div style={{
                 minHeight: 120,

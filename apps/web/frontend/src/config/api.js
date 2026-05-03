@@ -19,8 +19,19 @@ function normalizeBase(url) {
   if (url === undefined || url === null || String(url).trim() === '') return '';
   return String(url).replace(/\/$/, '');
 }
-const BASE = normalizeBase(import.meta.env.VITE_API_BASE_URL);
+const ENV_BASE = normalizeBase(import.meta.env.VITE_API_BASE_URL);
 const BUILD_KEY = import.meta.env.VITE_MODELFORGE_API_KEY || '';
+
+/** Runtime override from Settings (same-origin default when unset). */
+export function getApiBase() {
+  try {
+    const o = window.localStorage.getItem('modelforge_api_base');
+    if (o != null && String(o).trim() !== '') return normalizeBase(o);
+  } catch {
+    /* ignore */
+  }
+  return ENV_BASE;
+}
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const RETRY_BACKOFF_MS = 500;
@@ -55,7 +66,7 @@ async function rawFetch(path, options, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${BASE}${path}`, {
+    const res = await fetch(`${getApiBase()}${path}`, {
       ...options,
       signal: controller.signal,
       headers: buildHeaders(options.headers || {}),
@@ -88,7 +99,8 @@ export async function apiFetch(path, options = {}, { timeoutMs = DEFAULT_TIMEOUT
 }
 
 export function wsConnect(path) {
-  const origin = BASE || (typeof window !== 'undefined' ? window.location.origin : '');
+  const base = getApiBase();
+  const origin = base || (typeof window !== 'undefined' ? window.location.origin : '');
   const wsBase = origin.replace(/^http/, 'ws');
   const key = getApiKey();
   const sep = path.includes('?') ? '&' : '?';

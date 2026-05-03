@@ -32,6 +32,7 @@ class EvolutionPollStatus(BaseModel):
 
     run_id: str | None = None
     status: str = "idle"
+    is_running: bool = False
     generation: int = 0
     current_step: str | None = None
     started_at: datetime | None = None

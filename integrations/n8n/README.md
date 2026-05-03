@@ -20,6 +20,8 @@ Workflow JSON exports live in [`workflows/`](workflows/). They are wired for **D
    | `N8N_BASIC_AUTH_USER` / `N8N_BASIC_AUTH_PASSWORD` | Reverse-proxy style protection for the editor. |
    | `SLACK_WEBHOOK_URL` | Optional. Slack nodes use `={{ $env.SLACK_WEBHOOK_URL }}`. |
    | `N8N_WEBHOOK_EVOLUTION_URL` | Set on the **API** container — target for evolution events (`http://n8n:5678/webhook/evolution-events`). |
+| `N8N_WEBHOOK_SECRET` | Optional. API sends `X-Webhook-Signature: sha256=<hmac>` over `event_type|run_id|generation`. Add a **Code** node after the webhook in Evolution Monitor to verify when this is set. |
+| `EVOLUTION_BASE_MODEL` / `EVOLUTION_MAX_GENS` | Passed into the **n8n** container for the scheduler’s `POST /api/evolve/start` JSON body. |
 
 3. **Owner account** — after first boot, run:
 
@@ -36,13 +38,14 @@ Workflow JSON exports live in [`workflows/`](workflows/). They are wired for **D
 
 | File | Role |
 | ---- | ---- |
-| `evolution-monitor.json` | Webhook `POST /webhook/evolution-events` — routes `generation_complete`, `champion_promoted`, `run_complete`, `error`. |
-| `evolution-scheduler.json` | Every 6h: if GPU available, `POST /api/evolve/start` with `X-API-Key`. |
-| `health-check-monitor.json` | Every 15m: `GET /api/system/health`, expects `status === ok`, posts failures to `/api/system/alerts`. |
+| `evolution-monitor.json` | Webhook `POST /webhook/evolution-events` — routes `generation_complete`, `champion_promoted`, `run_complete`, `error`. Response body echoes `event_type` + timestamp. |
+| `evolution-scheduler.json` | Every 6h: `GET /api/evolve/status` — skips start when `is_running`; else `GET /api/system/gpu`; if GPU available, `POST /api/evolve/start` with body from `$env.EVOLUTION_BASE_MODEL` / `$env.EVOLUTION_MAX_GENS`. |
+| `health-check-monitor.json` | Every 15m: `GET /api/system/health`; healthy branch posts `heartbeat` to `/api/system/alerts`; failures Slack + API alert. |
+| `error-handler.json` | **Error workflow** (import, then assign as global error workflow in n8n Settings): `errorTrigger` → `POST /api/system/alerts` with `alert_type: workflow_error`. |
 
 ## FastAPI → n8n
 
-The LangGraph runner calls `N8N_WEBHOOK_EVOLUTION_URL` after each generation decision and on run completion / failure. Payload fields match the Evolution Monitor switch (`event_type`, `run_id`, `generation_number`, scores, etc.).
+The LangGraph runner calls `N8N_WEBHOOK_EVOLUTION_URL` after each generation decision and on run completion / failure. Payload includes `event_type`, `run_id`, `generation` / `generation_number`, `child_scores`, `champion_avg`, `total_generations`, `duration_seconds`, `champion_model_id`, and optional `X-Webhook-Signature` when `N8N_WEBHOOK_SECRET` is set on the API.
 
 ## Importing
 
@@ -65,3 +68,14 @@ The LangGraph runner calls `N8N_WEBHOOK_EVOLUTION_URL` after each generation dec
    ```
 
    Expect **202** once the workflow is **active** and the webhook path is registered.
+
+## Optional workflows (build in UI or extend exports)
+
+These are not shipped as JSON (they vary heavily by Slack app / CD URL); sketch them in n8n from the bundled patterns:
+
+- **Weekly digest** — Weekly schedule → `GET /api/lineage/tree` + `GET /api/evolution/generations` → Code (Markdown) → Slack.
+- **Slack slash `/infer`** — Slack webhook + signing secret → `POST /api/infer` → Slack response URL.
+- **Deployment promotion** — Subscribe to `champion_promoted` (duplicate webhook or sub-workflow) → IF `champion_avg >= $env.PROMOTE_MIN_SCORE` → `POST $env.DEPLOYMENT_HOOK_URL`.
+- **Model registry tag** — On `champion_promoted` → `GET /api/models/champion` → annotate external registry (HTTP / your CMDB).
+
+When `N8N_WEBHOOK_SECRET` is set on the API, add a **Code** node immediately after the Evolution Monitor webhook to verify `X-Webhook-Signature`: compute `sha256=HMAC-SHA256(secret, event_type + '|' + run_id + '|' + generation)` and compare to the header (reject with `Respond to Webhook` **401** if mismatch).

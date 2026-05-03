@@ -170,6 +170,7 @@ Entries are high-level; use `git log` for full history.
 | Date (UTC) | Summary |
 | ---------- | ------- |
 | **2026-05-03** | Frontend Docker image rebuilt (`modelforge-frontend:latest`). Container health: `GET /healthz` → **200**. Playwright against `http://localhost:3001`: **7 passed**, **1 skipped** (optional n8n test). Design system handoff archived under `docs/`. n8n: default public webhook base aligned to host port **5679**; see `integrations/n8n/README.md`. **Lineage:** flex height chain from `Layout.jsx` → `LineagePage.jsx` → `LineageTree.jsx` so the SVG fills the panel (fixes collapsed/clipped tree). |
+| **2026-05-03 (pm)** | **n8n:** pinned image `n8nio/n8n:1.78.0`, compose healthcheck, evolution scheduler uses `/api/evolve/status` + env-driven start body, health workflow posts heartbeats, `error-handler.json` export, monitor Slack copy + dynamic 202 body, `N8N_WEBHOOK_SECRET` + HMAC header from API. **API:** `EvolutionPollStatus.is_running`, richer `build_evolution_payload`. **Frontend:** lazy routes + manualChunks, nginx CSP/COOP + asset cache + `index.html` no-cache, SEO meta, `robots.txt` / `sitemap.xml` / `security.txt`, `ErrorBoundary` + `ToastProvider`, functional Settings (persist API base + key, test connection), Lucide sidebar, `/api/infer` + try/finally in playground, lineage error/retry, design-system `.btn` classes, `docs/ModelForge-Design-System-handoff.zip` refreshed from v2 handoff. |
 
 ---
 

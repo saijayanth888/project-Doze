@@ -149,6 +149,28 @@
       }
     },
     {
+      "id": "post-heartbeat-api",
+      "name": "POST Heartbeat to API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/api/system/alerts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-API-Key", "value": "={{ $env.MODELFORGE_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ alert_type: 'heartbeat', severity: 'info', api_status: 'ok', postgres_status: $json.postgres, redis_status: $json.redis, detected_at: $json.checked_at }) }}",
+        "options": { "timeout": 5000 }
+      }
+    },
+    {
       "id": "diagnose-failure",
       "name": "Diagnose Failure",
       "type": "n8n-nodes-base.set",
@@ -348,6 +370,17 @@
         [
           {
             "node": "POST Alert to ModelForge API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Healthy Heartbeat": {
+      "main": [
+        [
+          {
+            "node": "POST Heartbeat to API",
             "type": "main",
             "index": 0
           }

@@ -34,7 +34,7 @@
       ],
       "parameters": {
         "respondWith": "json",
-        "responseBody": "{\"status\":\"accepted\",\"event_type\":\"test\",\"received_at\":\"now\"}",
+        "responseBody": "={{ JSON.stringify({ status: 'accepted', event_type: $json.body?.event_type ?? $json.event_type, received_at: $now.toISO() }) }}",
         "options": {
           "responseCode": 202
         }
@@ -194,7 +194,7 @@
             {
               "id": "6",
               "name": "slack_message",
-              "value": "=:dna: *Generation {{ $json.generation_number }} Complete* | Best: `{{ $json.best_score ?? 'N/A' }}` | Avg: `{{ $json.avg_score ?? 'N/A' }}` | Run: `{{ $json.run_id }}`",
+              "value": "=*Generation {{ $json.generation_number }} complete* | Best: `{{ $json.best_score ?? 'N/A' }}` | Avg: `{{ $json.avg_score ?? 'N/A' }}` | Run: `{{ $json.run_id }}`",
               "type": "string"
             },
             {
@@ -280,7 +280,7 @@
             {
               "id": "6",
               "name": "slack_message",
-              "value": "=:trophy: *New Champion Promoted!* | Model: `{{ $json.champion_model_id ?? $json.model_id }}` | Score: `{{ $json.score ?? $json.fitness_score }}` | Gen: `{{ $json.generation_number }}`",
+              "value": "=*Champion promoted* | Model: `{{ $json.champion_model_id ?? $json.model_id }}` | Score: `{{ $json.score ?? $json.champion_avg ?? $json.fitness_score }}` | Gen: `{{ $json.generation_number }}`",
               "type": "string"
             },
             {
@@ -348,7 +348,7 @@
             {
               "id": "3",
               "name": "total_generations",
-              "value": "={{ $json.total_generations }}",
+              "value": "={{ $json.total_generations ?? $json.generation_number }}",
               "type": "number"
             },
             {
@@ -372,7 +372,7 @@
             {
               "id": "7",
               "name": "slack_message",
-              "value": "=:checkered_flag: *Evolution Run Complete!*\\n\u2022 Run ID: `{{ $json.run_id }}`\\n\u2022 Generations: `{{ $json.total_generations }}`\\n\u2022 Best Score: `{{ $json.best_score }}`\\n\u2022 Champion: `{{ $json.champion_model_id }}`\\n\u2022 Duration: `{{ Math.round(($json.duration_seconds ?? 0) / 60) }}m`",
+              "value": "=*Evolution run complete*\\n\u2022 Run ID: `{{ $json.run_id }}`\\n\u2022 Generations: `{{ $json.total_generations }}`\\n\u2022 Best score: `{{ $json.best_score }}`\\n\u2022 Champion: `{{ $json.champion_model_id }}`\\n\u2022 Duration: `{{ Math.round(($json.duration_seconds ?? 0) / 60) }}m`",
               "type": "string"
             },
             {
@@ -464,7 +464,7 @@
             {
               "id": "7",
               "name": "slack_message",
-              "value": "=:rotating_light: *Evolution Error!*\\n\u2022 Run: `{{ $json.run_id ?? 'unknown' }}`\\n\u2022 Code: `{{ $json.error_code ?? 'UNKNOWN' }}`\\n\u2022 Message: `{{ $json.error_message ?? $json.message }}`\\n\u2022 Generation: `{{ $json.generation_number ?? 'N/A' }}`",
+              "value": "=*Evolution error*\\n\u2022 Run: `{{ $json.run_id ?? 'unknown' }}`\\n\u2022 Code: `{{ $json.error_code ?? 'UNKNOWN' }}`\\n\u2022 Message: `{{ $json.error_message ?? $json.message }}`\\n\u2022 Generation: `{{ $json.generation_number ?? 'N/A' }}`",
               "type": "string"
             },
             {
