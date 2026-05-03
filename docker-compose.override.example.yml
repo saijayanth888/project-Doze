@@ -1,0 +1,14 @@
+# Copy to `docker-compose.override.yml` (gitignored) when host port 5678 is already taken
+# (e.g. another n8n or service). Then set matching values in `.env`:
+#   N8N_WEBHOOK_URL=http://localhost:5679/
+#   VITE_N8N_HOST=http://localhost:5679
+# Playwright / scripts: export N8N_URL=http://localhost:5679
+#
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+#
+services:
+  n8n:
+    ports:
+      - "5679:5678"
+    environment:
+      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5679/}

@@ -7,6 +7,22 @@ Workflow JSON exports live in [`workflows/`](workflows/). They are wired for **D
 | FastAPI  | `http://api:8000`     |
 | n8n UI   | `http://localhost:5678` (Compose maps host **5678** → container **5678**) |
 
+## Hard reset (wipe workflows + owner, re-bootstrap)
+
+Use when the editor is stuck, credentials are unknown, or health checks never go green after a bad migration.
+
+1. Set in `.env` (same values you will use in the browser): `N8N_BASIC_AUTH_USER` (default `admin`), `N8N_BASIC_AUTH_PASSWORD`, `N8N_OWNER_EMAIL`, `N8N_OWNER_PASSWORD` (often match basic auth for dev), and keep `N8N_ENCRYPTION_KEY` stable unless you intend a full credential re-import.
+2. From repo root:
+
+   ```bash
+   chmod +x scripts/n8n-reset-and-reseed.sh
+   ./scripts/n8n-reset-and-reseed.sh
+   ```
+
+3. Open the UI at `N8N_WEBHOOK_URL` without the trailing path (e.g. `http://localhost:5678`). Complete Basic Auth, then sign in as the owner email.
+
+If `docker ps` still shows `5679->5678`, you have a **`docker-compose.override.yml`** remapping the port. Either remove it to use the repo default `5678:5678`, or keep it and align `N8N_WEBHOOK_URL` / `N8N_URL` / `VITE_N8N_HOST` — see `docker-compose.override.example.yml`.
+
 ## Prerequisites
 
 1. **PostgreSQL** — n8n uses database `n8n` on the shared Postgres service (same `POSTGRES_USER` / `POSTGRES_PASSWORD` as ModelForge). Created automatically by `scripts/postgres-init/02-n8n-database.sql`.

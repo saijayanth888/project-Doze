@@ -39,6 +39,8 @@ port **8001** (see `MODELFORGE_API_HOST_PORT` in `.env`). The dashboard is at
 clashes with a Vite dev server on **3000**). The SPA picks up the API key from
 `VITE_MODELFORGE_API_KEY` or `localStorage["modelforge_api_key"]`.
 
+**Compose health `unhealthy`?** The n8n image includes `wget`, not `curl`; the stack healthcheck must use `wget` (fixed in `docker-compose.yml`). The frontend image probes `127.0.0.1` (not `localhost`) so IPv6-only `::1` does not bypass nginx. **`docker ps` shows `5679->5678`?** You likely have `docker-compose.override.yml` remapping the port — remove it or copy `docker-compose.override.example.yml` and align `N8N_WEBHOOK_URL` / `N8N_URL`. **Stuck n8n login:** `./scripts/n8n-reset-and-reseed.sh` (see `integrations/n8n/README.md`).
+
 ## Quickstart — DGX Spark (GPU)
 
 ```bash

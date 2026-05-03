@@ -78,8 +78,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # n8n image ships wget, not curl — curl here keeps the container "unhealthy" forever.
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5678/healthz >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5678/healthz || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -135,7 +136,7 @@ services:
     depends_on:
       - api
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost/healthz"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3

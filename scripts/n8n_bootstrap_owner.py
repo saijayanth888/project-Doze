@@ -8,10 +8,10 @@ already exists.
 Usage (from repo root, stack running)::
 
     export N8N_URL=http://localhost:5678
-    export N8N_BASIC_AUTH_USER=admin@modelforge.local
-    export N8N_BASIC_AUTH_PASSWORD=Modelforge2025!
+    export N8N_BASIC_AUTH_USER=admin
+    export N8N_BASIC_AUTH_PASSWORD=your-basic-auth-password
     export N8N_OWNER_EMAIL=admin@modelforge.local
-    export N8N_OWNER_PASSWORD=Modelforge2025!  # UI login password (can match basic auth)
+    export N8N_OWNER_PASSWORD=your-owner-password
     python3 scripts/n8n_bootstrap_owner.py
 """
 
