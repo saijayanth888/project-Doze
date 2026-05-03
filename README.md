@@ -39,7 +39,7 @@ port **8001** (see `MODELFORGE_API_HOST_PORT` in `.env`). The dashboard is at
 clashes with a Vite dev server on **3000**). The SPA picks up the API key from
 `VITE_MODELFORGE_API_KEY` or `localStorage["modelforge_api_key"]`.
 
-**Compose health `unhealthy`?** The n8n image includes `wget`, not `curl`; the stack healthcheck must use `wget` (fixed in `docker-compose.yml`). The frontend image probes `127.0.0.1` (not `localhost`) so IPv6-only `::1` does not bypass nginx. **`docker ps` shows `5679->5678`?** You likely have `docker-compose.override.yml` remapping the port — remove it or copy `docker-compose.override.example.yml` and align `N8N_WEBHOOK_URL` / `N8N_URL`. **Stuck n8n login:** `./scripts/n8n-reset-and-reseed.sh` (see `integrations/n8n/README.md`).
+**Compose health `unhealthy`?** The n8n image includes `wget`, not `curl`; the stack healthcheck must use `wget` (fixed in `docker-compose.yml`). The frontend image probes `127.0.0.1` (not `localhost`) so IPv6-only `::1` does not bypass nginx. **Two n8n host ports in `docker ps`?** Compose merges `ports` from overrides — remove duplicate `ports` and use **`N8N_HOST_PORT`** in `.env` with matching `N8N_WEBHOOK_URL` / `N8N_URL`. **Stuck n8n login:** `./scripts/n8n-reset-and-reseed.sh` (see `integrations/n8n/README.md`).
 
 ## Quickstart — DGX Spark (GPU)
 
@@ -173,8 +173,9 @@ Entries are high-level; use `git log` for full history.
 | ---------- | ------- |
 | **2026-05-03** | Frontend Docker image rebuilt (`modelforge-frontend:latest`). Container health: `GET /healthz` → **200**. Playwright against `http://localhost:3001`: **7 passed**, **1 skipped** (optional n8n test). Design system handoff archived under `docs/`. n8n: default public webhook base on host **5678**; see `integrations/n8n/README.md`. **Lineage:** flex height chain from `Layout.jsx` → `LineagePage.jsx` → `LineageTree.jsx` so the SVG fills the panel (fixes collapsed/clipped tree). |
 | **2026-05-03 (pm)** | **n8n:** pinned image `n8nio/n8n:1.78.0`, compose healthcheck, evolution scheduler uses `/api/evolve/status` + env-driven start body, health workflow posts heartbeats, `error-handler.json` export, monitor Slack copy + dynamic 202 body, `N8N_WEBHOOK_SECRET` + HMAC header from API. **API:** `EvolutionPollStatus.is_running`, richer `build_evolution_payload`. **Frontend:** lazy routes + manualChunks, nginx CSP/COOP + asset cache + `index.html` no-cache, SEO meta, `robots.txt` / `sitemap.xml` / `security.txt`, `ErrorBoundary` + `ToastProvider`, functional Settings (persist API base + key, test connection), Lucide sidebar, `/api/infer` + try/finally in playground, lineage error/retry, design-system `.btn` classes, `docs/ModelForge-Design-System-handoff.zip` refreshed from v2 handoff. |
-| **2026-05-03** | **n8n:** Docker Compose publishes the editor on host **5678** (same as in-container default). Update local `.env` `N8N_WEBHOOK_URL` / `VITE_N8N_HOST` if you still point at **5679**. Use `docker-compose.override.yml` to remap the host port if **5678** is already taken. |
+| **2026-05-03** | **n8n:** Host publish port is **`N8N_HOST_PORT`** (default **5678**). If you change it, set matching `N8N_WEBHOOK_URL` / `VITE_N8N_HOST` / `N8N_URL` — do not add a second `ports` entry in compose overrides (Compose merges port lists). |
 | **2026-05-03** | **n8n:** Compose default image `n8nio/n8n:latest` via `N8N_IMAGE` (was hard-pinned `1.78.0`). Set `N8N_IMAGE` in `.env` or a service override to pin a semver/digest for production. |
+| **2026-05-03** | **n8n:** Single published host port via `N8N_HOST_PORT` (default 5678); removed override example that merged an extra `ports` entry. |
 
 ---
 

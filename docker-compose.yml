@@ -48,9 +48,9 @@ services:
     image: ${N8N_IMAGE:-n8nio/n8n:latest}
     container_name: mf-n8n
     ports:
-      # n8n listens on 5678 inside the container; host uses the same (n8n default).
-      # If 5678 is already in use locally, use docker-compose.override.yml to remap.
-      - "5678:5678"
+      # Single host binding (Compose merges `ports` across override files — do not add another n8n `ports` entry there).
+      # If host :5678 is busy, set N8N_HOST_PORT in `.env` (e.g. 5679) and match N8N_WEBHOOK_URL / VITE_N8N_HOST.
+      - "${N8N_HOST_PORT:-5678}:5678"
     environment:
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
