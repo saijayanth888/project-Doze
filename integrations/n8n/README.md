@@ -1,6 +1,23 @@
 # n8n integration
 
-Workflow JSON exports live in [`workflows/`](workflows/). They are wired for **Docker Compose networking**:
+Workflow JSON exports live in [`workflows/`](workflows/) (canonical copy for Compose and MCP). They are wired for **Docker Compose networking**:
+
+> **Note:** A duplicate tree may exist at repo root `n8n/workflows/` from older copies — prefer **`integrations/n8n/workflows/`** for imports and automation.
+
+## Cursor MCP (validate & inspect workflows)
+
+Use n8n’s **instance-level MCP** so Cursor can call tools such as `search_workflows`, `get_workflow_details`, `validate_workflow` (Workflow SDK source), and `execute_workflow`.
+
+1. In n8n: **Settings → Instance-level MCP** → enable MCP → **Connection details** → **Access Token** tab → copy your token (store only in local config, not in git).
+2. In this repo: `cp .cursor/mcp.json.example .cursor/mcp.json` and edit:
+   - **`url`**: same origin as your browser n8n URL, path **`/mcp-server/http`** (no trailing slash on the origin), e.g. `http://localhost:5679/mcp-server/http` if `N8N_HOST_PORT=5679`.
+   - **`Authorization`**: `Bearer <token>` from step 1.
+3. Restart Cursor (or reload MCP) so the server registers.
+4. For each workflow the agent should run or inspect in depth, enable **Available in MCP** (workflow **…** menu → Settings, or the Instance-level MCP workflows table). `search_workflows` can still list previews of others.
+
+**Security:** If a token was pasted into chat or committed by mistake, rotate it in n8n (generate a new MCP access token) and update `.cursor/mcp.json` only.
+
+Official reference: [Accessing n8n MCP server](https://docs.n8n.io/advanced-ai/mcp/accessing-n8n-mcp-server/) and [MCP tools reference](https://docs.n8n.io/advanced-ai/mcp/mcp_tools_reference/).
 
 | Endpoint | URL inside containers |
 | -------- | --------------------- |

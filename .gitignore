@@ -53,6 +53,9 @@ adapters/
 *.ckpt
 hf_cache/
 
+# ── Cursor (local MCP secrets) ───────────────────────
+.cursor/mcp.json
+
 # ── Editor / OS ───────────────────────────────────────
 .vscode/
 .idea/
