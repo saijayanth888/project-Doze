@@ -1,7 +1,4 @@
 {
-  "createdAt": "2026-05-03T15:12:40.087Z",
-  "updatedAt": "2026-05-03T15:12:40.087Z",
-  "id": "y1QGtKQ9aeDW1jCu",
   "name": "Health Check Monitor",
   "active": true,
   "isArchived": false,
@@ -153,21 +150,32 @@
       "name": "POST Heartbeat to API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1080, 200],
+      "position": [
+        1080,
+        200
+      ],
       "parameters": {
         "method": "POST",
         "url": "http://api:8000/api/system/alerts",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" },
-            { "name": "X-API-Key", "value": "={{ $env.MODELFORGE_API_KEY }}" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ alert_type: 'heartbeat', severity: 'info', api_status: 'ok', postgres_status: $json.postgres, redis_status: $json.redis, detected_at: $json.checked_at }) }}",
-        "options": { "timeout": 5000 }
+        "options": {
+          "timeout": 5000
+        }
       }
     },
     {
@@ -229,7 +237,7 @@
             {
               "id": "8",
               "name": "slack_message",
-              "value": "=:red_circle: *ModelForge Health Check FAILED*\\n\u2022 Time: `{{ $now.toISO() }}`\\n\u2022 HTTP Status: `{{ $json.statusCode ?? 'unreachable' }}`\\n\u2022 API Status: `{{ $json.body?.status ?? 'unknown' }}`\\n\u2022 Postgres: `{{ $json.body?.postgres ?? $json.postgres ?? 'unknown' }}`\\n\u2022 Redis: `{{ $json.body?.redis ?? $json.redis ?? 'unknown' }}`\\n\u2022 Failed: `{{ [($json.body?.postgres ?? $json.postgres) !== 'ok' ? 'postgres' : null, ($json.body?.redis ?? $json.redis) !== 'ok' ? 'redis' : null].filter(Boolean).join(', ') || 'api_unreachable' }}`",
+              "value": "=:red_circle: *ModelForge Health Check FAILED*\\n• Time: `{{ $now.toISO() }}`\\n• HTTP Status: `{{ $json.statusCode ?? 'unreachable' }}`\\n• API Status: `{{ $json.body?.status ?? 'unknown' }}`\\n• Postgres: `{{ $json.body?.postgres ?? $json.postgres ?? 'unknown' }}`\\n• Redis: `{{ $json.body?.redis ?? $json.redis ?? 'unknown' }}`\\n• Failed: `{{ [($json.body?.postgres ?? $json.postgres) !== 'ok' ? 'postgres' : null, ($json.body?.redis ?? $json.redis) !== 'ok' ? 'redis' : null].filter(Boolean).join(', ') || 'api_unreachable' }}`",
               "type": "string"
             },
             {
@@ -251,7 +259,7 @@
     },
     {
       "id": "alert-failure",
-      "name": "Slack \u2014 Health Alert",
+      "name": "Slack — Health Alert",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -358,14 +366,14 @@
       "main": [
         [
           {
-            "node": "Slack \u2014 Health Alert",
+            "node": "Slack — Health Alert",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Slack \u2014 Health Alert": {
+    "Slack — Health Alert": {
       "main": [
         [
           {
@@ -390,78 +398,9 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "saveManualExecutions": true,
+    "saveManualExecutions": false,
     "callerPolicy": "workflowsFromSameOwner"
   },
   "staticData": null,
-  "meta": null,
-  "pinData": null,
-  "versionId": "c7e39d73-1794-4588-9825-31cb545d5d37",
-  "triggerCount": 0,
-  "shared": [
-    {
-      "createdAt": "2026-05-03T15:12:40.087Z",
-      "updatedAt": "2026-05-03T15:12:40.087Z",
-      "role": "workflow:owner",
-      "workflowId": "y1QGtKQ9aeDW1jCu",
-      "projectId": "pCXiSbORL8ggyach",
-      "project": {
-        "createdAt": "2026-05-03T15:01:46.271Z",
-        "updatedAt": "2026-05-03T15:02:06.125Z",
-        "id": "pCXiSbORL8ggyach",
-        "name": "Model Forge <admin@modelforge.local>",
-        "type": "personal",
-        "icon": null,
-        "description": null,
-        "projectRelations": [
-          {
-            "createdAt": "2026-05-03T15:01:46.271Z",
-            "updatedAt": "2026-05-03T15:01:46.271Z",
-            "role": "project:personalOwner",
-            "userId": "fbbcca9f-40d6-4aa2-9382-1a8d501d89b6",
-            "projectId": "pCXiSbORL8ggyach",
-            "user": {
-              "createdAt": "2026-05-03T15:01:46.029Z",
-              "updatedAt": "2026-05-03T15:15:37.875Z",
-              "id": "fbbcca9f-40d6-4aa2-9382-1a8d501d89b6",
-              "email": "admin@modelforge.local",
-              "firstName": "Model",
-              "lastName": "Forge",
-              "personalizationAnswers": {
-                "version": "v4",
-                "personalization_survey_submitted_at": "2026-05-03T15:07:53.732Z",
-                "personalization_survey_n8n_version": "1.102.4",
-                "companyIndustryExtended": [
-                  "it-industry"
-                ],
-                "companyType": "other"
-              },
-              "settings": {
-                "userActivated": true,
-                "firstSuccessfulWorkflowId": "p1psmWso6gdVfK39",
-                "userActivatedAt": 1777821337859
-              },
-              "role": "global:owner",
-              "disabled": false,
-              "mfaEnabled": false,
-              "lastActiveAt": "2026-05-03",
-              "isPending": false
-            }
-          }
-        ]
-      }
-    }
-  ],
-  "tags": [],
-  "parentFolder": null,
-  "scopes": [
-    "workflow:create",
-    "workflow:delete",
-    "workflow:execute",
-    "workflow:list",
-    "workflow:move",
-    "workflow:read",
-    "workflow:share",
-    "workflow:update"
-  ]
+  "description": "Every 15m: GET /api/system/health; on success posts heartbeat to /api/system/alerts; on failure notifies Slack (SLACK_WEBHOOK_URL) and API."
 }

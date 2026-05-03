@@ -8,7 +8,10 @@
       "name": "Error Trigger",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
-      "position": [240, 300]
+      "position": [
+        240,
+        300
+      ]
     },
     {
       "parameters": {
@@ -17,26 +20,49 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" },
-            { "name": "X-API-Key", "value": "={{ $env.MODELFORGE_API_KEY }}" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ alert_type: 'workflow_error', severity: 'critical', failed_services: 'n8n', api_status: String($json.execution?.error?.message || $json.error?.message || 'unknown'), detected_at: $now.toISO() }) }}",
-        "options": { "timeout": 10000 }
+        "options": {
+          "timeout": 10000
+        }
       },
       "id": "post-api-alert",
       "name": "POST Alert to API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [480, 300]
+      "position": [
+        480,
+        300
+      ]
     }
   ],
   "connections": {
     "Error Trigger": {
-      "main": [[{ "node": "POST Alert to API", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "POST Alert to API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "settings": { "executionOrder": "v1" }
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false
+  },
+  "description": "Assign as n8n global error workflow (Settings). Posts workflow_error alerts to /api/system/alerts with MODELFORGE_API_KEY."
 }

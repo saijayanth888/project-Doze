@@ -179,6 +179,7 @@ Entries are high-level; use `git log` for full history.
 | **2026-05-03** | **n8n:** Single published host port via `N8N_HOST_PORT` (default 5678); removed override example that merged an extra `ports` entry. |
 | **2026-05-03** | **n8n:** Auto-import bundled workflows via CLI (`n8n-import-workflows-compose.sh`) after owner bootstrap; workflows bind-mounted at `/import/modelforge-workflows`. Optional idempotent REST sync: `scripts/n8n_import_workflows.py` + `N8N_API_KEY`. |
 | **2026-05-03** | **n8n + Cursor:** `.cursor/mcp.json.example` for instance-level MCP (`validate_workflow`, `get_workflow_details`, etc.); `.cursor/mcp.json` gitignored. |
+| **2026-05-03** | **n8n:** Production-oriented bundle cleanup (strip export noise, descriptions, webhook `allowedOrigins`, HTTP timeouts, `saveManualExecutions: false`); `validate_n8n_workflow_bundle.py` + CI job. |
 
 ---
 

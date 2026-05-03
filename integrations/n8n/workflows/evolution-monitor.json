@@ -1,7 +1,4 @@
 {
-  "createdAt": "2026-05-03T15:12:33.957Z",
-  "updatedAt": "2026-05-03T15:17:18.838Z",
-  "id": "p1psmWso6gdVfK39",
   "name": "Evolution Monitor",
   "active": true,
   "isArchived": false,
@@ -20,7 +17,9 @@
         "httpMethod": "POST",
         "path": "evolution-events",
         "responseMode": "responseNode",
-        "options": {}
+        "options": {
+          "allowedOrigins": "http://api:8000"
+        }
       }
     },
     {
@@ -210,7 +209,7 @@
     },
     {
       "id": "notify-generation",
-      "name": "Slack \u2014 Generation Log",
+      "name": "Slack — Generation Log",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -296,7 +295,7 @@
     },
     {
       "id": "notify-champion",
-      "name": "Slack \u2014 Champion Alert",
+      "name": "Slack — Champion Alert",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -372,7 +371,7 @@
             {
               "id": "7",
               "name": "slack_message",
-              "value": "=*Evolution run complete*\\n\u2022 Run ID: `{{ $json.run_id }}`\\n\u2022 Generations: `{{ $json.total_generations }}`\\n\u2022 Best score: `{{ $json.best_score }}`\\n\u2022 Champion: `{{ $json.champion_model_id }}`\\n\u2022 Duration: `{{ Math.round(($json.duration_seconds ?? 0) / 60) }}m`",
+              "value": "=*Evolution run complete*\\n• Run ID: `{{ $json.run_id }}`\\n• Generations: `{{ $json.total_generations }}`\\n• Best score: `{{ $json.best_score }}`\\n• Champion: `{{ $json.champion_model_id }}`\\n• Duration: `{{ Math.round(($json.duration_seconds ?? 0) / 60) }}m`",
               "type": "string"
             },
             {
@@ -388,7 +387,7 @@
     },
     {
       "id": "notify-run-complete",
-      "name": "Slack \u2014 Run Summary",
+      "name": "Slack — Run Summary",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -464,7 +463,7 @@
             {
               "id": "7",
               "name": "slack_message",
-              "value": "=*Evolution error*\\n\u2022 Run: `{{ $json.run_id ?? 'unknown' }}`\\n\u2022 Code: `{{ $json.error_code ?? 'UNKNOWN' }}`\\n\u2022 Message: `{{ $json.error_message ?? $json.message }}`\\n\u2022 Generation: `{{ $json.generation_number ?? 'N/A' }}`",
+              "value": "=*Evolution error*\\n• Run: `{{ $json.run_id ?? 'unknown' }}`\\n• Code: `{{ $json.error_code ?? 'UNKNOWN' }}`\\n• Message: `{{ $json.error_message ?? $json.message }}`\\n• Generation: `{{ $json.generation_number ?? 'N/A' }}`",
               "type": "string"
             },
             {
@@ -486,7 +485,7 @@
     },
     {
       "id": "notify-error",
-      "name": "Slack \u2014 Error Alert",
+      "name": "Slack — Error Alert",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -613,7 +612,7 @@
       "main": [
         [
           {
-            "node": "Slack \u2014 Generation Log",
+            "node": "Slack — Generation Log",
             "type": "main",
             "index": 0
           }
@@ -624,7 +623,7 @@
       "main": [
         [
           {
-            "node": "Slack \u2014 Champion Alert",
+            "node": "Slack — Champion Alert",
             "type": "main",
             "index": 0
           }
@@ -635,7 +634,7 @@
       "main": [
         [
           {
-            "node": "Slack \u2014 Run Summary",
+            "node": "Slack — Run Summary",
             "type": "main",
             "index": 0
           }
@@ -646,7 +645,7 @@
       "main": [
         [
           {
-            "node": "Slack \u2014 Error Alert",
+            "node": "Slack — Error Alert",
             "type": "main",
             "index": 0
           }
@@ -657,78 +656,9 @@
   "settings": {
     "executionOrder": "v1",
     "errorWorkflow": "",
-    "saveManualExecutions": true,
+    "saveManualExecutions": false,
     "callerPolicy": "workflowsFromSameOwner"
   },
   "staticData": null,
-  "meta": null,
-  "pinData": null,
-  "versionId": "fb13c1d6-b1c9-4636-94fb-c0a9946b68bb",
-  "triggerCount": 1,
-  "shared": [
-    {
-      "createdAt": "2026-05-03T15:12:33.957Z",
-      "updatedAt": "2026-05-03T15:12:33.957Z",
-      "role": "workflow:owner",
-      "workflowId": "p1psmWso6gdVfK39",
-      "projectId": "pCXiSbORL8ggyach",
-      "project": {
-        "createdAt": "2026-05-03T15:01:46.271Z",
-        "updatedAt": "2026-05-03T15:02:06.125Z",
-        "id": "pCXiSbORL8ggyach",
-        "name": "Model Forge <admin@modelforge.local>",
-        "type": "personal",
-        "icon": null,
-        "description": null,
-        "projectRelations": [
-          {
-            "createdAt": "2026-05-03T15:01:46.271Z",
-            "updatedAt": "2026-05-03T15:01:46.271Z",
-            "role": "project:personalOwner",
-            "userId": "fbbcca9f-40d6-4aa2-9382-1a8d501d89b6",
-            "projectId": "pCXiSbORL8ggyach",
-            "user": {
-              "createdAt": "2026-05-03T15:01:46.029Z",
-              "updatedAt": "2026-05-03T15:15:37.875Z",
-              "id": "fbbcca9f-40d6-4aa2-9382-1a8d501d89b6",
-              "email": "admin@modelforge.local",
-              "firstName": "Model",
-              "lastName": "Forge",
-              "personalizationAnswers": {
-                "version": "v4",
-                "personalization_survey_submitted_at": "2026-05-03T15:07:53.732Z",
-                "personalization_survey_n8n_version": "1.102.4",
-                "companyIndustryExtended": [
-                  "it-industry"
-                ],
-                "companyType": "other"
-              },
-              "settings": {
-                "userActivated": true,
-                "firstSuccessfulWorkflowId": "p1psmWso6gdVfK39",
-                "userActivatedAt": 1777821337859
-              },
-              "role": "global:owner",
-              "disabled": false,
-              "mfaEnabled": false,
-              "lastActiveAt": "2026-05-03",
-              "isPending": false
-            }
-          }
-        ]
-      }
-    }
-  ],
-  "tags": [],
-  "parentFolder": null,
-  "scopes": [
-    "workflow:create",
-    "workflow:delete",
-    "workflow:execute",
-    "workflow:list",
-    "workflow:move",
-    "workflow:read",
-    "workflow:share",
-    "workflow:update"
-  ]
+  "description": "Production webhook for ModelForge evolution events (POST /webhook/evolution-events). Optional Slack via SLACK_WEBHOOK_URL. CORS allows http://api:8000 only (Docker API → n8n)."
 }

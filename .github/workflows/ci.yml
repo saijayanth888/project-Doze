@@ -52,6 +52,17 @@ jobs:
           ENVIRONMENT: development
         run: pytest -q --cov=src --cov-report=term-missing
 
+  n8n-workflows:
+    name: n8n bundle (static validate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Validate bundled workflow JSON
+        run: python3 scripts/validate_n8n_workflow_bundle.py
+
   frontend:
     name: Frontend (build + e2e smoke)
     runs-on: ubuntu-latest

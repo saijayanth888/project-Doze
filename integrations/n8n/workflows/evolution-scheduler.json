@@ -5,14 +5,22 @@
     {
       "parameters": {
         "rule": {
-          "interval": [{ "field": "hours", "hoursInterval": 6 }]
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
         }
       },
       "id": "schedule-trigger",
       "name": "Every 6 Hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [240, 300]
+      "position": [
+        240,
+        300
+      ]
     },
     {
       "parameters": {
@@ -21,27 +29,43 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "X-API-Key", "value": "={{ $env.MODELFORGE_API_KEY }}" }
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
           ]
         },
-        "options": { "timeout": 15000 }
+        "options": {
+          "timeout": 15000
+        }
       },
       "id": "get-evolve-status",
       "name": "GET Evolve Status",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [460, 300]
+      "position": [
+        460,
+        300
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "conditions": [
             {
               "id": "running",
               "leftValue": "={{ $json.is_running }}",
               "rightValue": true,
-              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
             }
           ],
           "combinator": "and"
@@ -51,7 +75,10 @@
       "name": "Evolution Already Running?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [680, 300]
+      "position": [
+        680,
+        300
+      ]
     },
     {
       "parameters": {},
@@ -59,7 +86,10 @@
       "name": "Skip Overlap",
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
-      "position": [900, 160]
+      "position": [
+        900,
+        160
+      ]
     },
     {
       "parameters": {
@@ -68,27 +98,43 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "X-API-Key", "value": "={{ $env.MODELFORGE_API_KEY }}" }
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
           ]
         },
-        "options": {}
+        "options": {
+          "timeout": 20000
+        }
       },
       "id": "get-gpu-status",
       "name": "GET GPU Status",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [900, 380]
+      "position": [
+        900,
+        380
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "conditions": [
             {
               "id": "gpu-check",
               "leftValue": "={{ $json.gpu_available }}",
               "rightValue": true,
-              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
             }
           ],
           "combinator": "and"
@@ -98,7 +144,10 @@
       "name": "GPU Available?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1120, 380]
+      "position": [
+        1120,
+        380
+      ]
     },
     {
       "parameters": {
@@ -107,20 +156,31 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" },
-            { "name": "X-API-Key", "value": "={{ $env.MODELFORGE_API_KEY }}" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
           ]
         },
         "sendBody": true,
         "contentType": "json",
         "jsonBody": "={{ JSON.stringify({ base_model: $env.EVOLUTION_BASE_MODEL || 'llama3.2:3b', max_generations: Number($env.EVOLUTION_MAX_GENS || 10) }) }}",
-        "options": {}
+        "options": {
+          "timeout": 120000
+        }
       },
       "id": "start-evolution",
       "name": "POST Start Evolution",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1340, 280]
+      "position": [
+        1340,
+        280
+      ]
     },
     {
       "parameters": {},
@@ -128,33 +188,92 @@
       "name": "No GPU (Mac Dev Mode)",
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
-      "position": [1340, 480]
+      "position": [
+        1340,
+        480
+      ]
     }
   ],
   "connections": {
     "Every 6 Hours": {
-      "main": [[{ "node": "GET Evolve Status", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "GET Evolve Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "GET Evolve Status": {
-      "main": [[{ "node": "Evolution Already Running?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Evolution Already Running?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Evolution Already Running?": {
       "main": [
-        [{ "node": "Skip Overlap", "type": "main", "index": 0 }],
-        [{ "node": "GET GPU Status", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Skip Overlap",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "GET GPU Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "GET GPU Status": {
-      "main": [[{ "node": "GPU Available?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "GPU Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "GPU Available?": {
       "main": [
-        [{ "node": "POST Start Evolution", "type": "main", "index": 0 }],
-        [{ "node": "No GPU (Mac Dev Mode)", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "POST Start Evolution",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No GPU (Mac Dev Mode)",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
-  "settings": { "executionOrder": "v1" },
-  "staticData": { "node:Every 6 Hours": { "recurrenceRules": [] } },
-  "meta": { "templateCredsSetupCompleted": true }
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": {
+    "node:Every 6 Hours": {
+      "recurrenceRules": []
+    }
+  },
+  "description": "Runs every 6h: GET evolve status and GPU; POST /api/evolve/start when idle and GPU is available. Uses MODELFORGE_API_KEY and EVOLUTION_* env on the n8n container."
 }

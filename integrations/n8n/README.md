@@ -19,6 +19,12 @@ Use n8n’s **instance-level MCP** so Cursor can call tools such as `search_work
 
 Official reference: [Accessing n8n MCP server](https://docs.n8n.io/advanced-ai/mcp/accessing-n8n-mcp-server/) and [MCP tools reference](https://docs.n8n.io/advanced-ai/mcp/mcp_tools_reference/).
 
+### Hardening & validation (repo scripts)
+
+- **`python3 scripts/harden_n8n_workflow_exports.py`** — strips instance-specific export fields, sets workflow descriptions, tightens webhook CORS, HTTP timeouts, and `saveManualExecutions: false` on bundled workflows. Run after re-exporting from the n8n UI.
+- **`python3 scripts/validate_n8n_workflow_bundle.py`** — static JSON checks (structure + obvious secret patterns); safe for **CI** without a running n8n instance.
+- **Live MCP** (`validate_workflow`, `get_workflow_details`, …) requires your Cursor client to connect to n8n per `.cursor/mcp.json.example`; that validation runs in **your** IDE, not in GitHub Actions.
+
 | Endpoint | URL inside containers |
 | -------- | --------------------- |
 | FastAPI  | `http://api:8000`     |
@@ -103,7 +109,7 @@ The JSON directory is bind-mounted read-only in `docker-compose.yml`. Import is 
 
 1. **Public URL** — Set `N8N_WEBHOOK_URL` / `WEBHOOK_URL` to the HTTPS origin users and the API will use (same host you expose for webhooks). Must match the editor **Settings → Public URL** behavior so copied webhook URLs are correct.
 2. **Secrets** — Use strong `N8N_ENCRYPTION_KEY`, `N8N_BASIC_AUTH_*`, and `MODELFORGE_API_KEY`. Never commit real values; inject via your orchestrator or secret manager.
-3. **Evolution webhook** — In **Evolution Monitor**, tighten **Webhook → Options → Allowed Origins** from `*` to your API origin (or remove browser-only testing origins) so only your FastAPI host can POST in environments where that matters.
+3. **Evolution webhook** — Bundled JSON sets **Allowed Origins** to `http://api:8000` (Docker service name). If your API calls the webhook from another origin or TLS front URL, update the Webhook node options accordingly (or temporarily clear origins for debugging).
 4. **API → n8n** — `N8N_WEBHOOK_EVOLUTION_URL` on the API service must stay on the **Docker internal** URL (`http://n8n:5678/webhook/evolution-events`); only the **public** `WEBHOOK_URL` changes for link generation.
 5. **Smoke-test webhook** (replace host if needed):
 
