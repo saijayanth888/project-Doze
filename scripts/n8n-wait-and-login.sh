@@ -46,5 +46,11 @@ fi
 
 "${PYTHON}" "${ROOT}/scripts/n8n_bootstrap_owner.py" || true
 
+if [[ "${N8N_SKIP_WORKFLOW_IMPORT:-}" != "1" ]]; then
+  if [[ -x "${ROOT}/scripts/n8n-import-workflows-compose.sh" ]]; then
+    "${ROOT}/scripts/n8n-import-workflows-compose.sh" || true
+  fi
+fi
+
 echo ""
 echo "Done. Log in through the browser (Basic Auth dialog, then n8n owner if prompted)."

@@ -76,6 +76,8 @@ services:
       - EVOLUTION_MAX_GENS=${EVOLUTION_MAX_GENS:-10}
     volumes:
       - n8n_data:/home/node/.n8n
+      # Bundled JSON for `n8n import:workflow` (see scripts/n8n-import-workflows-compose.sh).
+      - ./integrations/n8n/workflows:/import/modelforge-workflows:ro
     depends_on:
       postgres:
         condition: service_healthy

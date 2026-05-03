@@ -65,7 +65,18 @@ If `docker ps` shows **two** lines like `0.0.0.0:5678->5678` and `0.0.0.0:5679->
 
 The LangGraph runner calls `N8N_WEBHOOK_EVOLUTION_URL` after each generation decision and on run completion / failure. Payload includes `event_type`, `run_id`, `generation` / `generation_number`, `child_scores`, `champion_avg`, `total_generations`, `duration_seconds`, `champion_model_id`, and optional `X-Webhook-Signature` when `N8N_WEBHOOK_SECRET` is set on the API.
 
-## Importing
+## Importing bundled workflows (automated)
+
+On a normal Docker bootstrapping run, **`./scripts/n8n-wait-and-login.sh`** (and **`./scripts/n8n-reset-and-reseed.sh`**, which calls it) runs **`scripts/n8n-import-workflows-compose.sh`** after owner bootstrap. That script uses the official CLI:
+
+`n8n import:workflow --separate --input=/import/modelforge-workflows`
+
+The JSON directory is bind-mounted read-only in `docker-compose.yml`. Import is **skipped** if a workflow named **Evolution Monitor** already exists (avoids duplicates on every script run). To force another CLI import anyway: `N8N_REIMPORT_BUNDLED_WORKFLOWS=1 ./scripts/n8n-import-workflows-compose.sh`.
+
+- Disable all auto-import: `N8N_SKIP_WORKFLOW_IMPORT=1`
+- **Idempotent HTTP sync** (PATCH by name): set **`N8N_API_KEY`** from n8n **Settings → API**, then run `python3 scripts/n8n_import_workflows.py` with `N8N_URL` (and basic-auth env vars if the editor is behind basic auth).
+
+## Manual import (UI)
 
 1. Open n8n → **Workflows** → **Import from File**.
 2. Select each JSON under `integrations/n8n/workflows/`.

@@ -27,7 +27,7 @@ Prereqs: Python 3.13, Node 20, Docker Desktop.
 cp .env.example .env          # MODELFORGE_API_KEY, POSTGRES_PASSWORD, N8N_ENCRYPTION_KEY, n8n basic auth
 make install-dev              # creates .venv (Python 3.13) + web deps
 make db-only                  # postgres + redis + n8n (n8n uses Postgres DB `n8n`)
-./scripts/n8n-wait-and-login.sh   # optional: wait for /healthz + REST owner bootstrap
+./scripts/n8n-wait-and-login.sh   # wait for /healthz, owner bootstrap, bundled n8n workflow import
 make api                      # terminal 1 — FastAPI on :8000
 make frontend                 # terminal 2 — Vite on :3000
 ```
@@ -176,6 +176,7 @@ Entries are high-level; use `git log` for full history.
 | **2026-05-03** | **n8n:** Host publish port is **`N8N_HOST_PORT`** (default **5678**). If you change it, set matching `N8N_WEBHOOK_URL` / `VITE_N8N_HOST` / `N8N_URL` — do not add a second `ports` entry in compose overrides (Compose merges port lists). |
 | **2026-05-03** | **n8n:** Compose default image `n8nio/n8n:latest` via `N8N_IMAGE` (was hard-pinned `1.78.0`). Set `N8N_IMAGE` in `.env` or a service override to pin a semver/digest for production. |
 | **2026-05-03** | **n8n:** Single published host port via `N8N_HOST_PORT` (default 5678); removed override example that merged an extra `ports` entry. |
+| **2026-05-03** | **n8n:** Auto-import bundled workflows via CLI (`n8n-import-workflows-compose.sh`) after owner bootstrap; workflows bind-mounted at `/import/modelforge-workflows`. Optional idempotent REST sync: `scripts/n8n_import_workflows.py` + `N8N_API_KEY`. |
 
 ---
 
