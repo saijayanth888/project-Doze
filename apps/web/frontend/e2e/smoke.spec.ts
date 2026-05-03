@@ -7,7 +7,7 @@ test("landing page loads", async ({ page }) => {
 });
 
 test("n8n health (full stack)", async ({ request }) => {
-  const base = (process.env.N8N_URL || "http://127.0.0.1:5679").replace(/\/$/, "");
+  const base = (process.env.N8N_URL || "http://127.0.0.1:5678").replace(/\/$/, "");
   const res = await request.get(`${base}/healthz`);
   expect(res.ok()).toBeTruthy();
 });

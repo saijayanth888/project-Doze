@@ -47,8 +47,9 @@ services:
     image: n8nio/n8n:1.78.0
     container_name: mf-n8n
     ports:
-      # Host 5679 if 5678 is already taken (adjust N8N_WEBHOOK_URL for generated links).
-      - "5679:5678"
+      # n8n listens on 5678 inside the container; host uses the same (n8n default).
+      # If 5678 is already in use locally, use docker-compose.override.yml to remap.
+      - "5678:5678"
     environment:
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
@@ -60,8 +61,8 @@ services:
       - N8N_HOST=0.0.0.0
       - N8N_PORT=5678
       - N8N_PROTOCOL=http
-      # Host port defaults to 5679 (see ports:). Set N8N_WEBHOOK_URL if you publish a different port.
-      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5679/}
+      # Must match the host port you publish (see ports:). Override via N8N_WEBHOOK_URL when remapping.
+      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5678/}
       - N8N_BASIC_AUTH_ACTIVE=true
       - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
       - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:?N8N_BASIC_AUTH_PASSWORD must be set}

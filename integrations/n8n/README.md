@@ -5,7 +5,7 @@ Workflow JSON exports live in [`workflows/`](workflows/). They are wired for **D
 | Endpoint | URL inside containers |
 | -------- | --------------------- |
 | FastAPI  | `http://api:8000`     |
-| n8n UI   | `http://localhost:5679` (Compose default host port → container `5678`) |
+| n8n UI   | `http://localhost:5678` (Compose maps host **5678** → container **5678**) |
 
 ## Prerequisites
 
@@ -62,7 +62,7 @@ The LangGraph runner calls `N8N_WEBHOOK_EVOLUTION_URL` after each generation dec
 5. **Smoke-test webhook** (replace host if needed):
 
    ```bash
-   curl -sS -X POST "http://localhost:5679/webhook/evolution-events" \
+   curl -sS -X POST "http://localhost:5678/webhook/evolution-events" \
      -H "Content-Type: application/json" \
      -d '{"event_type":"run_complete","run_id":"e2e-smoke","generation_number":0}'
    ```

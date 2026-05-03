@@ -12,7 +12,7 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-N8N_URL="${N8N_URL:-http://localhost:5679}"
+N8N_URL="${N8N_URL:-http://localhost:5678}"
 echo "Waiting for n8n at ${N8N_URL}/healthz …"
 for _ in $(seq 1 60); do
   if curl -fsS "${N8N_URL}/healthz" >/dev/null 2>&1; then
