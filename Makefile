@@ -1,7 +1,9 @@
-.PHONY: help dev db-only api frontend up down build logs logs-api install install-dev clean health pull-model n8n-open dashboard-open test lint format
+.PHONY: help dev db-only api frontend up down build logs logs-api install install-dev clean health pull-model n8n-open dashboard-open test lint format test-e2e n8n-bootstrap
 
 PYTHON ?= python3.13
 VENV   ?= .venv
+API_DIR = apps/api
+WEB_DIR = apps/web/frontend
 
 help:
 	@echo "ModelForge — make targets"
@@ -14,7 +16,9 @@ help:
 	@echo "  up-gpu         docker compose --profile gpu up -d"
 	@echo "  down           docker compose down"
 	@echo "  build          docker compose build"
-	@echo "  test           pytest"
+	@echo "  test           pytest (apps/api)"
+	@echo "  test-e2e       Playwright browser tests (apps/web/frontend)"
+	@echo "  n8n-bootstrap  Wait for n8n + create owner via REST (see .env)"
 	@echo "  lint           ruff + mypy"
 	@echo "  health         curl /api/system/health"
 
@@ -22,21 +26,21 @@ help:
 install:
 	$(PYTHON) -m venv $(VENV)
 	$(VENV)/bin/pip install --upgrade pip
-	$(VENV)/bin/pip install -r requirements.txt
-	cd frontend && npm install
+	$(VENV)/bin/pip install -r $(API_DIR)/requirements.txt
+	cd $(WEB_DIR) && npm install
 
 install-dev: install
-	$(VENV)/bin/pip install -r requirements-dev.txt
+	$(VENV)/bin/pip install -r $(API_DIR)/requirements-dev.txt
 
 # ── Local dev (run in two terminals) ──────────────────────
 db-only:
 	docker compose up -d postgres redis n8n
 
 api:
-	$(VENV)/bin/uvicorn main:app --app-dir src --host 0.0.0.0 --port 8000 --reload --reload-dir src
+	$(VENV)/bin/uvicorn main:app --app-dir $(API_DIR)/src --host 0.0.0.0 --port 8000 --reload --reload-dir $(API_DIR)/src
 
 frontend:
-	cd frontend && npm run dev
+	cd $(WEB_DIR) && npm run dev
 
 # ── Docker stack ──────────────────────────────────────────
 up:
@@ -59,15 +63,23 @@ logs-api:
 
 # ── Tests + lint ──────────────────────────────────────────
 test:
-	$(VENV)/bin/pytest
+	cd $(API_DIR) && ../$(VENV)/bin/pytest
 
 lint:
-	$(VENV)/bin/ruff check src tests
-	$(VENV)/bin/mypy src
+	cd $(API_DIR) && ../$(VENV)/bin/ruff check src tests
+	cd $(API_DIR) && ../$(VENV)/bin/mypy src
 
 format:
-	$(VENV)/bin/ruff format src tests
-	$(VENV)/bin/ruff check --fix src tests
+	cd $(API_DIR) && ../$(VENV)/bin/ruff format src tests
+	cd $(API_DIR) && ../$(VENV)/bin/ruff check --fix src tests
+
+test-e2e:
+	cd $(WEB_DIR) && npx playwright install --with-deps
+	cd $(WEB_DIR) && npm run test:e2e
+
+n8n-bootstrap:
+	chmod +x scripts/n8n-wait-and-login.sh
+	./scripts/n8n-wait-and-login.sh
 
 # ── Utilities ─────────────────────────────────────────────
 pull-model:
@@ -86,4 +98,4 @@ n8n-open:
 	open http://localhost:5678
 
 dashboard-open:
-	open http://localhost:3000
+	open http://localhost:$${MODELFORGE_WEB_HOST_PORT:-3001}

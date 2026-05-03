@@ -47,7 +47,7 @@ Thumbs.db
 .git/
 .github/
 docs/
-tests/
+apps/api/tests/
 *.md
 !README.md
 .claude/

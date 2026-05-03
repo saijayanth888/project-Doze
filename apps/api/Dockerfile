@@ -1,0 +1,39 @@
+## Build context: repository root (see docker-compose.yml).
+## ── Build stage ──────────────────────────────────────
+FROM python:3.13-slim AS builder
+WORKDIR /build
+
+ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+
+COPY apps/api/requirements.txt .
+RUN pip install --prefix=/install -r requirements.txt
+
+## ── Runtime stage ────────────────────────────────────
+FROM python:3.13-slim AS runtime
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app/src
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --system --gid 1000 app \
+    && useradd --system --uid 1000 --gid app --shell /usr/sbin/nologin app \
+    && mkdir -p /app/data \
+    && chown -R app:app /app
+
+COPY --from=builder /install /usr/local
+COPY --chown=app:app apps/api/src/ ./src/
+
+USER app
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
+    CMD curl -fsS http://localhost:8000/api/system/status || exit 1
+
+ENTRYPOINT ["tini", "--"]
+CMD ["uvicorn", "main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]

@@ -56,6 +56,8 @@ Complete 6-page SPA for ModelForge, a self-evolving LLM platform. Single self-co
 - Zoom/pan via D3 zoom
 - Diagonal MODELFORGE watermark at 3% opacity
 
+**Shipped app (Vite) note:** routing uses **React Router** paths (`/lineage`, not hash). The tree is **React + SVG** (not D3 in the current implementation), loads `GET /api/lineage/tree`, and uses `viewBox` + `preserveAspectRatio="xMidYMid meet"`. The chart wrapper must receive height from a **flex chain** (`Layout` `<main>` column flex + `minHeight: 0` → `LineagePage` `flex: 1` → tree wrapper `flex: 1` → `LineageTree` `height: 100%`); otherwise the SVG collapses and the graph appears clipped.
+
 ### Page 4: Benchmarks (`#/benchmarks`)
 - Sortable heatmap table (25 gens × 5 benchmarks)
 - Solid hex cell bg colors (pre-blended, no RGBA)

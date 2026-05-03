@@ -70,3 +70,8 @@ docker-compose.override.yml
 .claude/
 *.bak
 *.tmp
+
+# Playwright
+**/playwright-report/
+**/test-results/
+**/.playwright/

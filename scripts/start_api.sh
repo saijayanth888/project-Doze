@@ -19,8 +19,8 @@ echo "Swagger UI: http://localhost:8000/docs"
 echo ""
 
 exec uvicorn main:app \
-  --app-dir src \
+  --app-dir apps/api/src \
   --host 0.0.0.0 \
   --port 8000 \
   --reload \
-  --reload-dir src
+  --reload-dir apps/api/src

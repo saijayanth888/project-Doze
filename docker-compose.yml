@@ -3,8 +3,9 @@
 #   Mac dev:   docker compose up -d
 #   DGX Spark: docker compose --profile gpu up -d
 #
-# Always-on services: postgres, redis, n8n, api, frontend.
-# `gpu` profile additionally starts: ollama, vllm.
+# n8n uses PostgreSQL (database `n8n`, same credentials as POSTGRES_USER).
+# Pass MODELFORGE_API_KEY into the n8n container so HTTP Request nodes can
+# call the FastAPI service as `http://api:8000` with header X-API-Key.
 
 services:
   postgres:
@@ -15,10 +16,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: ${POSTGRES_DB:-modelforge}
     ports:
-      - "5432:5432"
+      # Host 5433 avoids clashing with a local Postgres on 5432. Inside Compose, use `postgres:5432`.
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-modelforge} -d ${POSTGRES_DB:-modelforge}"]
       interval: 10s
@@ -45,39 +47,53 @@ services:
     image: n8nio/n8n:latest
     container_name: mf-n8n
     ports:
-      - "5678:5678"
+      # Host 5679 if 5678 is already taken (adjust N8N_WEBHOOK_URL for generated links).
+      - "5679:5678"
     environment:
-      - DB_TYPE=sqlite
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=n8n
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-modelforge}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY must be set (min 32 chars recommended)}
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      # Host port defaults to 5679 (see ports:). Set N8N_WEBHOOK_URL if you publish a different port.
+      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5679/}
       - N8N_BASIC_AUTH_ACTIVE=true
       - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
       - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:?N8N_BASIC_AUTH_PASSWORD must be set}
-      - N8N_HOST=localhost
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=http
-      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5678/}
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      # Exposed to workflow expressions as $env.MODELFORGE_API_KEY
+      - MODELFORGE_API_KEY=${MODELFORGE_API_KEY:-}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
     volumes:
       - n8n_data:/home/node/.n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   api:
     build:
       context: .
-      dockerfile: Dockerfile.api
+      dockerfile: apps/api/Dockerfile
     image: modelforge-api:latest
     container_name: mf-api
     env_file: .env
     environment:
-      # Override the .env defaults so the container resolves the
-      # internal Compose hostnames instead of localhost.
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-modelforge}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-modelforge}
       REDIS_URL: redis://redis:6379
       OLLAMA_HOST: http://ollama:11434
       VLLM_HOST: http://vllm:8000
+      N8N_WEBHOOK_EVOLUTION_URL: "${N8N_WEBHOOK_EVOLUTION_URL:-http://n8n:5678/webhook/evolution-events}"
     expose:
       - "8000"
     ports:
-      - "8000:8000"
+      # If host :8000 is already in use, set `MODELFORGE_API_HOST_PORT=8001` (or similar) in `.env`.
+      - "${MODELFORGE_API_HOST_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,13 +112,15 @@ services:
   frontend:
     build:
       context: .
-      dockerfile: Dockerfile.frontend
+      dockerfile: apps/web/Dockerfile
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+        # Default empty: browser calls /api on the same host (nginx → api:8000).
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
     image: modelforge-frontend:latest
     container_name: mf-frontend
     ports:
-      - "3000:80"
+      # Use 3001 when another dev server already binds host :3000 (e.g. Vite).
+      - "${MODELFORGE_WEB_HOST_PORT:-3001}:80"
     depends_on:
       - api
     healthcheck:
@@ -112,7 +130,6 @@ services:
       retries: 3
     restart: unless-stopped
 
-  # ── GPU-only services (DGX Spark) ────────────────────────────
   ollama:
     image: ollama/ollama:latest
     container_name: mf-ollama
