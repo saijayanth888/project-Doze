@@ -1,0 +1,211 @@
+"""
+DataCurator — Sources and generates training data targeting model weaknesses.
+
+This is the "Self-Targeted Data Curation" component — the core IP of ModelForge.
+The model identifies what it's bad at, then generates/selects training data
+specifically to improve those weaknesses.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+logger = logging.getLogger("modelforge.curator")
+
+
+@dataclass
+class CurationResult:
+    data_path: str
+    num_samples: int
+    categories_targeted: list[str]
+    sources: list[str]
+
+
+class DataCuratorBackend(Protocol):
+    async def curate(
+        self,
+        *,
+        weak_categories: list[str],
+        weakness_report: str,
+        generation: int,
+        max_samples: int,
+        config: dict,
+    ) -> CurationResult: ...
+
+
+WEAKNESS_DATASETS: dict[str, list[tuple[str, str | None, int]]] = {
+    "mmlu": [("cais/mmlu", "all", 2000)],
+    "arc_challenge": [("allenai/ai2_arc", "ARC-Challenge", 1500)],
+    "hellaswag": [("Rowan/hellaswag", None, 1500)],
+    "gsm8k": [("openai/gsm8k", "main", 2000)],
+    "humaneval": [("bigcode/humanevalpack", "python", 1000)],
+}
+
+
+class MockDataCurator:
+    name = "mock"
+
+    async def curate(
+        self,
+        *,
+        weak_categories: list[str],
+        weakness_report: str,
+        generation: int,
+        max_samples: int,
+        config: dict,
+    ) -> CurationResult:
+        await asyncio.sleep(0.3)
+        n = min(max_samples, 1200 if weak_categories else 1000)
+        path = f"data/curated/gen-{generation}"
+        return CurationResult(
+            data_path=path,
+            num_samples=n,
+            categories_targeted=list(weak_categories),
+            sources=["mock"],
+        )
+
+
+class HuggingFaceDataCurator:
+    name = "huggingface"
+
+    def __init__(self) -> None:
+        try:
+            import datasets  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError(
+                "HuggingFaceDataCurator requires `datasets` (pip install datasets)."
+            ) from exc
+
+    def _normalize_sample(self, category: str, example: dict[str, Any]) -> dict[str, Any] | None:
+        # Best-effort normalization across the mapped datasets.
+        if category == "gsm8k":
+            q = example.get("question")
+            a = example.get("answer")
+            if q and a:
+                return {"instruction": str(q), "response": str(a)}
+        elif category == "mmlu":
+            question = example.get("question")
+            choices = example.get("choices") or example.get("options")
+            answer = example.get("answer")
+            if question and choices is not None and answer is not None:
+                if isinstance(choices, (list, tuple)):
+                    choice_lines = "\n".join([f"{i}. {c}" for i, c in enumerate(choices)])
+                else:
+                    choice_lines = str(choices)
+                inst = f"{question}\n\nChoices:\n{choice_lines}\n\nAnswer with the correct choice."
+                # Some configs store answer as index, others as string.
+                resp = str(answer)
+                return {"instruction": inst, "response": resp}
+        elif category == "arc_challenge":
+            q = (example.get("question") or {}).get("stem") if isinstance(example.get("question"), dict) else example.get("question")
+            choices = example.get("choices") or (example.get("question") or {}).get("choices")
+            answer_key = example.get("answerKey") or example.get("answer")
+            if q and choices and answer_key:
+                labels = choices.get("label") if isinstance(choices, dict) else None
+                texts = choices.get("text") if isinstance(choices, dict) else None
+                if labels and texts:
+                    choice_lines = "\n".join([f"{l}. {t}" for l, t in zip(labels, texts)])
+                else:
+                    choice_lines = str(choices)
+                inst = f"{q}\n\nChoices:\n{choice_lines}\n\nAnswer with the correct choice label."
+                return {"instruction": inst, "response": str(answer_key)}
+        elif category == "hellaswag":
+            ctx = example.get("ctx") or example.get("context")
+            endings = example.get("endings") or example.get("choices")
+            label = example.get("label") or example.get("answer")
+            if ctx and endings is not None and label is not None:
+                if isinstance(endings, (list, tuple)):
+                    choice_lines = "\n".join([f"{i}. {c}" for i, c in enumerate(endings)])
+                else:
+                    choice_lines = str(endings)
+                inst = f"{ctx}\n\nChoose the best continuation:\n{choice_lines}"
+                return {"instruction": inst, "response": str(label)}
+        elif category == "humaneval":
+            prompt = example.get("prompt")
+            canonical_solution = example.get("canonical_solution") or example.get("solution")
+            if prompt and canonical_solution:
+                inst = f"Complete the following Python function:\n\n{prompt}"
+                return {"instruction": inst, "response": str(canonical_solution)}
+
+        # Fallback: if it already looks like instruction/response.
+        if "instruction" in example and "response" in example:
+            return {"instruction": str(example["instruction"]), "response": str(example["response"])}
+        if "question" in example and "response" in example:
+            return {"instruction": str(example["question"]), "response": str(example["response"])}
+        return None
+
+    async def curate(
+        self,
+        *,
+        weak_categories: list[str],
+        weakness_report: str,
+        generation: int,
+        max_samples: int,
+        config: dict,
+    ) -> CurationResult:
+        from datasets import Dataset, load_dataset  # lazy-ish (constructor already gated)
+
+        categories = [c for c in weak_categories if c in WEAKNESS_DATASETS]
+        if not categories:
+            categories = list(WEAKNESS_DATASETS.keys())
+
+        samples: list[dict[str, Any]] = []
+        sources: list[str] = []
+
+        logger.info(
+            "[curator] gen=%d targeting=%s max_samples=%d report=%s",
+            generation,
+            categories,
+            max_samples,
+            weakness_report[:200],
+        )
+
+        per_cat_budget = max(1, int(max_samples / max(1, len(categories))))
+        for category in categories:
+            for ds_name, ds_config, suggested_n in WEAKNESS_DATASETS.get(category, []):
+                take_n = min(per_cat_budget, suggested_n)
+                try:
+                    ds = load_dataset(ds_name, ds_config, split=f"train[:{take_n}]")
+                except Exception as exc:
+                    logger.warning("[curator] failed to load %s/%s: %s", ds_name, ds_config, exc)
+                    continue
+
+                for ex in ds:
+                    norm = self._normalize_sample(category, ex)
+                    if norm is None:
+                        continue
+                    samples.append(
+                        {
+                            "category": category,
+                            "source": "huggingface",
+                            "dataset_name": ds_name,
+                            "instruction": norm["instruction"],
+                            "response": norm["response"],
+                        }
+                    )
+                    if len(samples) >= max_samples:
+                        break
+                sources.append(ds_name)
+                if len(samples) >= max_samples:
+                    break
+            if len(samples) >= max_samples:
+                break
+
+        out_dir = f"data/curated/gen-{generation}"
+        os.makedirs(out_dir, exist_ok=True)
+
+        ds_out = Dataset.from_list(samples)
+        ds_out.save_to_disk(out_dir)
+        logger.info("[curator] saved %d samples to %s", len(ds_out), out_dir)
+
+        return CurationResult(
+            data_path=out_dir,
+            num_samples=len(ds_out),
+            categories_targeted=categories,
+            sources=sorted(set(sources)) if sources else ["huggingface"],
+        )
+

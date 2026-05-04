@@ -26,6 +26,11 @@ from agents.training_backend import (
     MockTrainingBackend,
     TrainingBackend,
 )
+from services.data_curator import (
+    DataCuratorBackend,
+    HuggingFaceDataCurator,
+    MockDataCurator,
+)
 from services.lineage_db import LineageDB
 from services.n8n_webhook import build_evolution_payload, post_evolution_event
 from utils.gpu import get_gpu_status
@@ -45,26 +50,33 @@ def request_stop(run_id: str) -> bool:
     return True
 
 
-def _select_backends(prefer_real: bool) -> tuple[TrainingBackend, EvalBackend]:
+def _select_backends(prefer_real: bool) -> tuple[TrainingBackend, EvalBackend, DataCuratorBackend]:
     if not prefer_real:
-        return MockTrainingBackend(), MockEvalBackend()
+        return MockTrainingBackend(), MockEvalBackend(), MockDataCurator()
     try:
-        return LoRATrainingBackend(), LMEvalHarnessBackend()
+        curator: DataCuratorBackend
+        try:
+            curator = HuggingFaceDataCurator()
+        except Exception as exc:
+            logger.warning("Curator backend unavailable (%s) — using mock curator.", exc)
+            curator = MockDataCurator()
+        return LoRATrainingBackend(), LMEvalHarnessBackend(), curator
     except Exception as exc:
         logger.warning("GPU backends unavailable (%s) — falling back to mock backends.", exc)
-        return MockTrainingBackend(), MockEvalBackend()
+        return MockTrainingBackend(), MockEvalBackend(), MockDataCurator()
 
 
 async def _run(run_id: str, config: dict, db: LineageDB) -> None:
     """Drive the graph, persisting after every node."""
     gpu = get_gpu_status()
     prefer_real = bool(gpu.get("gpu_available"))
-    training, eval_backend = _select_backends(prefer_real)
+    training, eval_backend, curator = _select_backends(prefer_real)
     logger.info(
-        "[evolution %s] starting (training=%s, eval=%s, gpu=%s)",
+        "[evolution %s] starting (training=%s, eval=%s, curator=%s, gpu=%s)",
         run_id,
         training.name,
         eval_backend.name,
+        getattr(curator, "name", "unknown"),
         prefer_real,
     )
 
@@ -113,6 +125,7 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     "is_champion": s.get("decision") == "promote",
                     "parent_scores": s.get("parent_scores", {}),
                     "child_scores": s.get("child_scores", {}),
+                    "weak_categories": s.get("weak_categories", []),
                     "decision_reason": s.get("decision_reason"),
                     "method": s.get("method"),
                     "training_data_size": s.get("training_data_size", 0),
@@ -148,12 +161,14 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     total_generations=int(s.get("max_generations", 0) or 0),
                     duration_seconds=dur or None,
                     champion_model_id=f"{base_model}@gen{s['generation']}",
+                    weak_categories=s.get("weak_categories", []),
                 )
             )
 
     graph = build_graph(
         training=training,
         eval_backend=eval_backend,
+        curator=curator,
         on_state_change=on_state_change,
     )
 
@@ -185,6 +200,7 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     duration_seconds=float(final.get("training_seconds", 0.0) or 0.0)
                     + float(final.get("eval_seconds", 0.0) or 0.0),
                     champion_model_id=f"{base_model}@gen{int(final.get('generation', 0) or 0)}",
+                    weak_categories=final.get("weak_categories", []),
                 )
             )
         logger.info(

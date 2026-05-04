@@ -9,6 +9,7 @@ import pytest
 from agents.eval_backend import MockEvalBackend
 from agents.evolution_graph import build_graph
 from agents.training_backend import MockTrainingBackend
+from services.data_curator import MockDataCurator
 
 
 @pytest.mark.asyncio
@@ -21,6 +22,7 @@ async def test_graph_runs_to_max_generations():
     graph = build_graph(
         training=MockTrainingBackend(0.0),
         eval_backend=MockEvalBackend(0.0),
+        curator=MockDataCurator(),
         on_state_change=cb,
     )
 
@@ -54,6 +56,14 @@ async def test_graph_runs_to_max_generations():
     assert decisions[2][2] == "promote"
     assert decisions[3][2] == "promote"
 
+    # New node is part of the traversal.
+    steps = [s[0] for s in states]
+    assert "identify_weaknesses" in steps
+    # For gen 1, identify_weaknesses must happen before training data generation.
+    i = steps.index("identify_weaknesses")
+    j = steps.index("generate_training")
+    assert i < j
+
 
 @pytest.mark.asyncio
 async def test_graph_respects_cancellation():
@@ -68,6 +78,7 @@ async def test_graph_respects_cancellation():
     graph = build_graph(
         training=MockTrainingBackend(0.0),
         eval_backend=MockEvalBackend(0.0),
+        curator=MockDataCurator(),
         on_state_change=cb,
     )
 

@@ -66,6 +66,7 @@ class LineageDB:
         generation = int(gen_data.get("generation", 0))
         promoted = bool(gen_data.get("promoted", False))
         is_champion = bool(gen_data.get("is_champion", False))
+        weak_categories = gen_data.get("weak_categories", []) or []
         parent_scores = gen_data.get("parent_scores", {}) or {}
         child_scores = gen_data.get("child_scores", gen_data.get("scores", {})) or {}
         decision_reason = gen_data.get("decision_reason")
@@ -78,13 +79,14 @@ class LineageDB:
                 """
                 INSERT INTO generations (
                     run_id, generation, promoted, is_champion,
-                    parent_scores, child_scores, decision_reason, method,
+                    weak_categories, parent_scores, child_scores, decision_reason, method,
                     training_data_size, duration_seconds, data
                 )
-                VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, $11::jsonb)
+                VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb)
                 ON CONFLICT (run_id, generation) DO UPDATE SET
                     promoted          = EXCLUDED.promoted,
                     is_champion       = EXCLUDED.is_champion,
+                    weak_categories   = EXCLUDED.weak_categories,
                     parent_scores     = EXCLUDED.parent_scores,
                     child_scores      = EXCLUDED.child_scores,
                     decision_reason   = EXCLUDED.decision_reason,
@@ -97,6 +99,7 @@ class LineageDB:
                 generation,
                 promoted,
                 is_champion,
+                json.dumps(weak_categories),
                 json.dumps(parent_scores),
                 json.dumps(child_scores),
                 decision_reason,
@@ -224,3 +227,112 @@ class LineageDB:
                 score,
                 promoted,
             )
+
+    # ── Embeddings / pgvector ───────────────────────────────────────
+    async def store_embedding(
+        self,
+        run_id: str,
+        generation: int,
+        model_id: str,
+        prompt: str,
+        response: str,
+        embedding: list[float],
+        benchmark: str | None = None,
+        score: float | None = None,
+    ) -> None:
+        """Store a model output with its embedding for drift detection."""
+        if self._pool is None:
+            return
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO model_embeddings
+                (run_id, generation, model_id, prompt, response, embedding, benchmark, score)
+                VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8)
+                """,
+                run_id,
+                int(generation),
+                model_id,
+                prompt,
+                response,
+                str(embedding),
+                benchmark,
+                score,
+            )
+
+    async def find_similar_training(
+        self, embedding: list[float], threshold: float = 0.92, limit: int = 10
+    ) -> list[dict]:
+        """Find training samples similar to a given embedding (deduplication)."""
+        if self._pool is None:
+            return []
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, instruction, category, generation,
+                       1 - (embedding <=> $1::vector) AS similarity
+                FROM training_samples
+                WHERE embedding IS NOT NULL
+                  AND 1 - (embedding <=> $1::vector) > $2
+                ORDER BY embedding <=> $1::vector
+                LIMIT $3
+                """,
+                str(embedding),
+                float(threshold),
+                int(limit),
+            )
+            return [dict(r) for r in rows]
+
+    async def is_duplicate(self, embedding: list[float], threshold: float = 0.95) -> bool:
+        """Check if a training sample is a near-duplicate."""
+        results = await self.find_similar_training(embedding, threshold, limit=1)
+        return len(results) > 0
+
+    async def detect_drift(self, gen_a: int, gen_b: int, sample_size: int = 50) -> dict:
+        """Compare model output distributions between two generations."""
+        if self._pool is None:
+            return {"drift_score": None, "message": "DB unavailable"}
+        async with self._pool.acquire() as conn:
+            rows_a = await conn.fetch(
+                "SELECT embedding::text FROM model_embeddings WHERE generation=$1 LIMIT $2",
+                int(gen_a),
+                int(sample_size),
+            )
+            rows_b = await conn.fetch(
+                "SELECT embedding::text FROM model_embeddings WHERE generation=$1 LIMIT $2",
+                int(gen_b),
+                int(sample_size),
+            )
+            if not rows_a or not rows_b:
+                return {"drift_score": None, "message": "Insufficient data"}
+
+            import json
+            import math
+
+            def parse_vec(row: Any) -> list[float]:
+                # embedding::text is either "[...]" (codec) or "(...)" (pg)
+                raw = row["embedding"]
+                if isinstance(raw, str) and raw.startswith("(") and raw.endswith(")"):
+                    raw = "[" + raw[1:-1] + "]"
+                return json.loads(raw)
+
+            vecs_a = [parse_vec(r) for r in rows_a]
+            vecs_b = [parse_vec(r) for r in rows_b]
+
+            if not vecs_a or not vecs_b:
+                return {"drift_score": None, "message": "Insufficient data"}
+
+            dim = len(vecs_a[0])
+            centroid_a = [sum(v[i] for v in vecs_a) / len(vecs_a) for i in range(dim)]
+            centroid_b = [sum(v[i] for v in vecs_b) / len(vecs_b) for i in range(dim)]
+            drift = math.sqrt(sum((a - b) ** 2 for a, b in zip(centroid_a, centroid_b)))
+            return {
+                "generation_a": int(gen_a),
+                "generation_b": int(gen_b),
+                "drift_score": round(float(drift), 4),
+                "interpretation": "minimal"
+                if drift < 0.1
+                else "moderate"
+                if drift < 0.3
+                else "significant",
+            }

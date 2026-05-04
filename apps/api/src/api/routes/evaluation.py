@@ -152,3 +152,8 @@ async def get_generation_results(
         )
 
     return results
+
+
+@router.get("/drift/{gen_a}/{gen_b}")
+async def get_drift(gen_a: int, gen_b: int, db: LineageDB = Depends(get_db)):
+    return await db.detect_drift(gen_a, gen_b)

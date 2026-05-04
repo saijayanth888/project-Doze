@@ -16,3 +16,16 @@ langchain-core==0.3.28
 structlog==24.4.0
 pgvector==0.3.6
 filelock==3.16.1
+
+# GPU dependencies (DGX Spark only)
+torch>=2.4.0
+transformers>=4.44.0
+datasets>=3.0.0
+trl>=0.11.0
+peft>=0.13.0
+accelerate>=0.34.0
+bitsandbytes>=0.44.0
+safetensors>=0.4.0
+sentencepiece>=0.2.0
+lm-eval>=0.4.0
+sentence-transformers>=3.0.0

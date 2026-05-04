@@ -54,6 +54,7 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
         generation          INT NOT NULL,
         promoted            BOOLEAN NOT NULL DEFAULT FALSE,
         is_champion         BOOLEAN NOT NULL DEFAULT FALSE,
+        weak_categories     JSONB NOT NULL DEFAULT '[]'::jsonb,
         parent_scores       JSONB NOT NULL DEFAULT '{}'::jsonb,
         child_scores        JSONB NOT NULL DEFAULT '{}'::jsonb,
         decision_reason     TEXT,
@@ -76,9 +77,42 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
         scored_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS model_embeddings (
+        id          SERIAL PRIMARY KEY,
+        run_id      TEXT REFERENCES evolution_runs(run_id) ON DELETE CASCADE,
+        generation  INT NOT NULL,
+        model_id    TEXT NOT NULL,
+        prompt      TEXT NOT NULL,
+        response    TEXT NOT NULL,
+        embedding   vector(384),
+        benchmark   TEXT,
+        score       FLOAT,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS training_samples (
+        id              SERIAL PRIMARY KEY,
+        generation      INT NOT NULL,
+        source          TEXT NOT NULL,
+        dataset_name    TEXT,
+        category        TEXT,
+        instruction     TEXT NOT NULL,
+        response        TEXT NOT NULL,
+        embedding       vector(384),
+        quality_score   FLOAT,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_runs_status ON evolution_runs(status)",
     "CREATE INDEX IF NOT EXISTS idx_gen_run ON generations(run_id, generation DESC)",
     "CREATE INDEX IF NOT EXISTS idx_bench_run_gen ON benchmark_scores(run_id, generation)",
+    "CREATE INDEX IF NOT EXISTS idx_emb_hnsw ON model_embeddings USING hnsw (embedding vector_cosine_ops) WITH (m=16, ef_construction=64)",
+    "CREATE INDEX IF NOT EXISTS idx_emb_gen ON model_embeddings(generation)",
+    "CREATE INDEX IF NOT EXISTS idx_train_hnsw ON training_samples USING hnsw (embedding vector_cosine_ops) WITH (m=16, ef_construction=64)",
+    "CREATE INDEX IF NOT EXISTS idx_train_gen ON training_samples(generation)",
+    "CREATE INDEX IF NOT EXISTS idx_train_cat ON training_samples(category)",
 )
 
 

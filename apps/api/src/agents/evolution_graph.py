@@ -41,6 +41,7 @@ from langgraph.graph import END, StateGraph
 
 from agents.eval_backend import EvalBackend, EvalResult
 from agents.training_backend import TrainingBackend, TrainingResult
+from services.data_curator import CurationResult, DataCuratorBackend
 
 logger = logging.getLogger("modelforge.agents.graph")
 
@@ -53,6 +54,9 @@ class EvolutionState(TypedDict, total=False):
     max_generations: int
     parent_scores: dict[str, float]
     child_scores: dict[str, float]
+    weak_categories: list[str]
+    weakness_report: str
+    training_data_path: str | None
     decision: str  # "promote" | "discard" | ""
     decision_reason: str
     method: str
@@ -76,6 +80,7 @@ def build_graph(
     *,
     training: TrainingBackend,
     eval_backend: EvalBackend,
+    curator: DataCuratorBackend,
     on_state_change: Any = None,
 ) -> Any:
     """Build and compile the LangGraph state machine.
@@ -101,9 +106,80 @@ def build_graph(
         await _emit(state, "init_run")
         return state
 
+    async def identify_weaknesses(state: EvolutionState) -> EvolutionState:
+        """Analyze parent scores to decide which benchmarks to target next."""
+        parent_scores = state.get("parent_scores", {})
+
+        if not parent_scores:
+            # First generation — no data yet, train broadly
+            state["weak_categories"] = ["mmlu", "arc_challenge", "hellaswag", "gsm8k", "humaneval"]
+            state["weakness_report"] = "Initial generation — broad training"
+            await _emit(state, "identify_weaknesses")
+            return state
+
+        avg = sum(parent_scores.values()) / len(parent_scores)
+        threshold = 0.55  # Absolute minimum acceptable score
+        min_score = min(parent_scores.values())
+
+        weak: list[str] = []
+        analysis_lines: list[str] = []
+
+        for bench, score in sorted(parent_scores.items(), key=lambda x: x[1]):
+            is_weak = False
+            reasons: list[str] = []
+
+            if score < threshold:
+                is_weak = True
+                reasons.append(f"below absolute threshold ({score:.3f} < {threshold})")
+            if score < avg * 0.90:
+                is_weak = True
+                reasons.append(f"below 90% of average ({score:.3f} < {avg*0.90:.3f})")
+            if score == min_score:
+                is_weak = True
+                reasons.append("lowest scoring benchmark")
+
+            if is_weak:
+                weak.append(bench)
+                analysis_lines.append(f"  {bench}: {score:.3f} — {', '.join(reasons)}")
+
+        if not weak:
+            weakest = min(parent_scores, key=parent_scores.get)
+            weak = [weakest]
+            analysis_lines.append(
+                f"  {weakest}: {parent_scores[weakest]:.3f} — targeted as lowest"
+            )
+
+        report = f"Generation {state['generation']} weakness analysis:\n"
+        report += f"  Average score: {avg:.3f}\n"
+        report += f"  Weak categories ({len(weak)}):\n"
+        report += "\n".join(analysis_lines)
+
+        state["weak_categories"] = weak
+        state["weakness_report"] = report
+
+        logger.info("[weakness] gen=%d weak=%s", state["generation"], weak)
+        await _emit(state, "identify_weaknesses")
+        return state
+
     async def generate_training(state: EvolutionState) -> EvolutionState:
-        # Real impl: pull champion responses, deduplicate, score, build a
-        # SFT dataset. The mock backend returns a synthetic count below.
+        weak = state.get("weak_categories") or ["mmlu", "arc_challenge", "hellaswag", "gsm8k", "humaneval"]
+        report = state.get("weakness_report", "No analysis available")
+        logger.info("[training-data] targeting %d categories: %s", len(weak), weak)
+
+        max_samples = int((state.get("config") or {}).get("max_samples", 3000))
+        try:
+            result: CurationResult = await curator.curate(
+                weak_categories=weak,
+                weakness_report=report,
+                generation=int(state.get("generation", 0) or 0),
+                max_samples=max_samples,
+                config=state.get("config", {}) or {},
+            )
+            state["training_data_path"] = result.data_path
+            state["training_data_size"] = int(result.num_samples)
+        except Exception as exc:
+            logger.warning("[training-data] curator failed: %s", exc)
+            state["training_data_path"] = None
         await _emit(state, "generate_training")
         return state
 
@@ -176,6 +252,7 @@ def build_graph(
 
     graph = StateGraph(EvolutionState)
     graph.add_node("init_run", init_run)
+    graph.add_node("identify_weaknesses", identify_weaknesses)
     graph.add_node("generate_training", generate_training)
     graph.add_node("train_adapter", train_adapter)
     graph.add_node("evaluate", evaluate)
@@ -183,7 +260,8 @@ def build_graph(
     graph.add_node("promote_or_discard", promote_or_discard)
 
     graph.set_entry_point("init_run")
-    graph.add_edge("init_run", "generate_training")
+    graph.add_edge("init_run", "identify_weaknesses")
+    graph.add_edge("identify_weaknesses", "generate_training")
     graph.add_edge("generate_training", "train_adapter")
     graph.add_edge("train_adapter", "evaluate")
     graph.add_edge("evaluate", "compare_to_champion")

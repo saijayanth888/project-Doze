@@ -62,6 +62,7 @@ def build_evolution_payload(
     total_generations: int | None = None,
     duration_seconds: float | None = None,
     champion_model_id: str | None = None,
+    weak_categories: list[str] | None = None,
 ) -> dict[str, Any]:
     """Shape expected by ``integrations/n8n/workflows/evolution-monitor``."""
     scores = child_scores or {}
@@ -73,6 +74,7 @@ def build_evolution_payload(
         "generation": gen,
         "decision": decision,
         "decision_reason": decision_reason,
+        "weak_categories": weak_categories or [],
         "scores": scores,
         "child_scores": scores,
         "best_score": max(scores.values()) if scores else None,

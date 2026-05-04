@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -102,8 +104,57 @@ class LMEvalHarnessBackend:
         )
 
     def _evaluate_sync(self, run_id: str, generation: int, adapter_path: str | None) -> EvalResult:
-        raise NotImplementedError(
-            "LMEvalHarnessBackend._evaluate_sync must be wired up to "
-            "lm_eval.simple_evaluate(model='hf-auto', model_args=...) "
-            "before deploying to DGX Spark."
+        import lm_eval
+
+        t0 = time.perf_counter()
+        base_model = os.environ.get("MODELFORGE_BASE_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
+
+        quick_eval = str(os.environ.get("MODELFORGE_QUICK_EVAL", "")).lower() in {"1", "true", "yes"}
+        if quick_eval:
+            tasks = ["mmlu"]
+            num_fewshot = 0
+            limit = 100
+        else:
+            tasks = list(_BENCHMARKS)
+            num_fewshot = 5
+            limit = None
+
+        scores: dict[str, float] = {}
+        logger.info(
+            "[lm-eval] run=%s gen=%d base=%s adapter=%s quick=%s tasks=%s",
+            run_id,
+            generation,
+            base_model,
+            adapter_path,
+            quick_eval,
+            tasks,
         )
+
+        for task in tasks:
+            try:
+                model_args = f"pretrained={base_model}"
+                if adapter_path:
+                    model_args = f"{model_args},peft={adapter_path}"
+
+                results = lm_eval.simple_evaluate(
+                    model="hf",
+                    model_args=model_args,
+                    tasks=[task],
+                    num_fewshot=num_fewshot,
+                    batch_size=8,
+                    device="cuda",
+                    limit=limit,
+                )
+                logger.info("[lm-eval] raw results (%s): %s", task, results)
+                r = (results or {}).get("results", {}).get(task, {}) or {}
+                score = r.get("acc_norm,none")
+                if score is None:
+                    score = r.get("acc,none", 0.0)
+                scores[task] = float(score or 0.0)
+            except Exception as exc:
+                logger.exception("[lm-eval] task failed (%s): %s", task, exc)
+                scores[task] = 0.0
+
+        elapsed = time.perf_counter() - t0
+        logger.info("[lm-eval] run=%s gen=%d scores=%s (%.1fs)", run_id, generation, scores, elapsed)
+        return EvalResult(scores=scores, duration_seconds=float(elapsed))
