@@ -3,6 +3,14 @@
   "active": false,
   "nodes": [
     {
+      "id": "schedule-trigger",
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        420
+      ],
       "parameters": {
         "rule": {
           "interval": [
@@ -12,17 +20,17 @@
             }
           ]
         }
-      },
-      "id": "schedule-trigger",
-      "name": "Every 6 Hours",
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.2,
-      "position": [
-        240,
-        300
-      ]
+      }
     },
     {
+      "id": "get-evolve-status",
+      "name": "GET Evolve Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        420,
+        420
+      ],
       "parameters": {
         "method": "GET",
         "url": "http://api:8000/api/evolve/status",
@@ -36,25 +44,30 @@
           ]
         },
         "options": {
-          "timeout": 15000
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
-      },
-      "id": "get-evolve-status",
-      "name": "GET Evolve Status",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        460,
-        300
-      ]
+      }
     },
     {
+      "id": "if-evolve-running",
+      "name": "Evolution Already Running?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        640,
+        420
+      ],
       "parameters": {
         "conditions": {
           "options": {
             "caseSensitive": true,
             "leftValue": "",
-            "typeValidation": "strict"
+            "typeValidation": "loose"
           },
           "conditions": [
             {
@@ -70,28 +83,28 @@
           ],
           "combinator": "and"
         }
-      },
-      "id": "if-evolve-running",
-      "name": "Evolution Already Running?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [
-        680,
-        300
-      ]
+      }
     },
     {
-      "parameters": {},
       "id": "skip-overlap",
       "name": "Skip Overlap",
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
       "position": [
-        900,
-        160
-      ]
+        860,
+        260
+      ],
+      "parameters": {}
     },
     {
+      "id": "get-gpu-status",
+      "name": "GET GPU Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        540
+      ],
       "parameters": {
         "method": "GET",
         "url": "http://api:8000/api/system/gpu",
@@ -105,30 +118,49 @@
           ]
         },
         "options": {
-          "timeout": 20000
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
-      },
-      "id": "get-gpu-status",
-      "name": "GET GPU Status",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        900,
-        380
-      ]
+      }
     },
     {
+      "id": "code-preflight",
+      "name": "GPU Preflight Checks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        540
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const gpu = $input.first().json || {};\nconst tempRaw = gpu.temperature ?? gpu.temperature_c ?? gpu.gpu_temp;\nconst memUsed = parseFloat(gpu.memory_used);\nconst memTotal = parseFloat(gpu.memory_total);\nconst memUtil = (Number.isFinite(memUsed) && Number.isFinite(memTotal) && memTotal > 0)\n  ? memUsed / memTotal\n  : null;\n\nconst checks = {\n  gpu_available: gpu.gpu_available === true,\n  temp_ok: tempRaw === undefined || tempRaw === null || parseFloat(tempRaw) < 80,\n  memory_ok: memUtil === null || memUtil < 0.5,\n};\n\nconst all_pass = Object.values(checks).every((v) => v === true);\n\nconst skip_reasons = [];\nif (!checks.gpu_available) skip_reasons.push('GPU unavailable');\nif (!checks.temp_ok) skip_reasons.push(`GPU too hot (${tempRaw}\\u00b0C)`);\nif (!checks.memory_ok) skip_reasons.push(`GPU memory too high (${memUsed}/${memTotal})`);\n\nconsole.log('[scheduler] preflight', { checks, all_pass, skip_reasons });\n\nreturn [{\n  json: {\n    gpu,\n    checks,\n    all_pass,\n    skip_reasons: skip_reasons.join(', '),\n    skip_reasons_list: skip_reasons,\n    memory_utilization: memUtil,\n    temperature: tempRaw,\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "if-all-pass",
+      "name": "All Preflight Checks Pass?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        540
+      ],
       "parameters": {
         "conditions": {
           "options": {
             "caseSensitive": true,
             "leftValue": "",
-            "typeValidation": "strict"
+            "typeValidation": "loose"
           },
           "conditions": [
             {
-              "id": "gpu-check",
-              "leftValue": "={{ $json.gpu_available }}",
+              "id": "all-pass",
+              "leftValue": "={{ $json.all_pass }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
@@ -139,17 +171,62 @@
           ],
           "combinator": "and"
         }
-      },
-      "id": "if-gpu-available",
-      "name": "GPU Available?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [
-        1120,
-        380
-      ]
+      }
     },
     {
+      "id": "get-eval-scores",
+      "name": "GET Eval Scores",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1520,
+        420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/eval/scores",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-plateau",
+      "name": "Plateau Analysis + Adaptive Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        420
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const raw = $input.first().json || {};\nconst trends = Array.isArray(raw)\n  ? raw\n  : Array.isArray(raw.trends)\n  ? raw.trends\n  : Array.isArray(raw.scores)\n  ? raw.scores\n  : [];\n\nconst promoted = {};\nfor (const t of trends) {\n  if (!t || !t.promoted) continue;\n  const gen = Number(t.generation);\n  const score = Number(t.score ?? t.child_score ?? t.avg_score);\n  if (!Number.isFinite(gen) || !Number.isFinite(score)) continue;\n  if (!promoted[gen]) promoted[gen] = [];\n  promoted[gen].push(score);\n}\n\nconst genAvgs = Object.entries(promoted)\n  .map(([gen, arr]) => ({\n    gen: Number(gen),\n    avg: arr.reduce((a, b) => a + b, 0) / arr.length,\n  }))\n  .sort((a, b) => b.gen - a.gen)\n  .slice(0, 5);\n\nlet plateau_detected = false;\nlet regression_risk = false;\nlet adaptive_max_gens = Number($env.EVOLUTION_MAX_GENS || 10);\nlet adaptive_max_samples = 3000;\n\nif (genAvgs.length >= 3) {\n  const recent3 = genAvgs.slice(0, 3);\n  const improvement = recent3[0].avg - recent3[2].avg;\n  if (improvement < 0.002) {\n    plateau_detected = true;\n    adaptive_max_gens = 15;\n    adaptive_max_samples = 5000;\n  }\n}\n\n// Detect regression risk: >2 benchmarks dropped in latest non-promoted gen.\nconst byGenBench = {};\nfor (const t of trends) {\n  const gen = Number(t.generation);\n  if (!Number.isFinite(gen)) continue;\n  if (!byGenBench[gen]) byGenBench[gen] = {};\n  byGenBench[gen][t.benchmark] = Number(t.score ?? t.child_score ?? 0);\n}\nconst gens = Object.keys(byGenBench).map(Number).sort((a, b) => b - a);\nif (gens.length >= 2) {\n  const last = byGenBench[gens[0]] || {};\n  const prev = byGenBench[gens[1]] || {};\n  let regressions = 0;\n  for (const k of Object.keys(last)) {\n    if (prev[k] !== undefined && last[k] < prev[k] - 0.005) regressions += 1;\n  }\n  if (regressions > 2) regression_risk = true;\n}\n\nconst body = {\n  base_model: $env.EVOLUTION_BASE_MODEL || 'llama3.2:3b',\n  max_generations: adaptive_max_gens,\n  max_samples: adaptive_max_samples,\n};\n\nconsole.log('[scheduler] plateau analysis', { plateau_detected, regression_risk, genAvgs, body });\n\nreturn [{\n  json: {\n    plateau_detected,\n    regression_risk,\n    gen_averages: genAvgs,\n    config: body,\n    body_json: JSON.stringify(body),\n    summary: `plateau=${plateau_detected} regression_risk=${regression_risk} max_gens=${adaptive_max_gens} max_samples=${adaptive_max_samples}`,\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "post-evolve-start",
+      "name": "POST Start Evolution",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1960,
+        420
+      ],
       "parameters": {
         "method": "POST",
         "url": "http://api:8000/api/evolve/start",
@@ -167,31 +244,145 @@
           ]
         },
         "sendBody": true,
-        "contentType": "json",
-        "jsonBody": "={{ JSON.stringify({ base_model: $env.EVOLUTION_BASE_MODEL || 'llama3.2:3b', max_generations: Number($env.EVOLUTION_MAX_GENS || 10) }) }}",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body_json }}",
         "options": {
-          "timeout": 120000
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
-      },
-      "id": "start-evolution",
-      "name": "POST Start Evolution",
+      }
+    },
+    {
+      "id": "if-slack-start",
+      "name": "Slack Configured? (start)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2180,
+        420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-webhook",
+              "leftValue": "={{ ($env.SLACK_WEBHOOK_URL || '').length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "slack-started",
+      "name": "Slack — Evolution Started",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1340,
-        280
-      ]
+        2400,
+        340
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: `:rocket: *ModelForge: Evolution started* | base=${$json.config?.base_model ?? $env.EVOLUTION_BASE_MODEL} | max_gens=${$json.config?.max_generations} | max_samples=${$json.config?.max_samples} | plateau=${$json.plateau_detected} | regression_risk=${$json.regression_risk}` }) }}",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
     },
     {
-      "parameters": {},
-      "id": "no-gpu-noop",
-      "name": "No GPU (Mac Dev Mode)",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
+      "id": "code-skip-reason",
+      "name": "Build Skip Reason",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
-        1340,
-        480
-      ]
+        1520,
+        660
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const j = $input.first().json || {};\nconst reasons = j.skip_reasons || (Array.isArray(j.skip_reasons_list) ? j.skip_reasons_list.join(', ') : 'unknown');\nconsole.log('[scheduler] skipped:', reasons);\nreturn [{\n  json: {\n    skipped: true,\n    skip_reasons: reasons,\n    slack_message: `:warning: *ModelForge: Evolution skipped* — ${reasons}`,\n    detected_at: new Date().toISOString(),\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "if-slack-skip",
+      "name": "Slack Configured? (skip)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1740,
+        660
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-webhook",
+              "leftValue": "={{ ($env.SLACK_WEBHOOK_URL || '').length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "slack-skipped",
+      "name": "Slack — Evolution Skipped",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1960,
+        660
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slack_message }) }}",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
     }
   ],
   "connections": {
@@ -239,14 +430,54 @@
       "main": [
         [
           {
-            "node": "GPU Available?",
+            "node": "GPU Preflight Checks",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "GPU Available?": {
+    "GPU Preflight Checks": {
+      "main": [
+        [
+          {
+            "node": "All Preflight Checks Pass?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Preflight Checks Pass?": {
+      "main": [
+        [
+          {
+            "node": "GET Eval Scores",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Skip Reason",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Eval Scores": {
+      "main": [
+        [
+          {
+            "node": "Plateau Analysis + Adaptive Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plateau Analysis + Adaptive Config": {
       "main": [
         [
           {
@@ -254,14 +485,53 @@
             "type": "main",
             "index": 0
           }
-        ],
+        ]
+      ]
+    },
+    "POST Start Evolution": {
+      "main": [
         [
           {
-            "node": "No GPU (Mac Dev Mode)",
+            "node": "Slack Configured? (start)",
             "type": "main",
             "index": 0
           }
         ]
+      ]
+    },
+    "Slack Configured? (start)": {
+      "main": [
+        [
+          {
+            "node": "Slack — Evolution Started",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Build Skip Reason": {
+      "main": [
+        [
+          {
+            "node": "Slack Configured? (skip)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Configured? (skip)": {
+      "main": [
+        [
+          {
+            "node": "Slack — Evolution Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
       ]
     }
   },
@@ -270,10 +540,6 @@
     "saveManualExecutions": false,
     "callerPolicy": "workflowsFromSameOwner"
   },
-  "staticData": {
-    "node:Every 6 Hours": {
-      "recurrenceRules": []
-    }
-  },
-  "description": "Runs every 6h: GET evolve status and GPU; POST /api/evolve/start when idle and GPU is available. Uses MODELFORGE_API_KEY and EVOLUTION_* env on the n8n container."
+  "staticData": null,
+  "description": "Smart 6h scheduler: skips when a run is in flight; runs GPU preflight (avail / temp / memory headroom); on pass pulls /api/eval/scores, detects plateau or regression risk, and POSTs an adaptive /api/evolve/start. Slack-notifies start vs skip reasons when SLACK_WEBHOOK_URL is set."
 }

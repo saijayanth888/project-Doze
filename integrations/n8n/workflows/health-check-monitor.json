@@ -10,7 +10,7 @@
       "typeVersion": 1.2,
       "position": [
         200,
-        300
+        420
       ],
       "parameters": {
         "rule": {
@@ -30,7 +30,7 @@
       "typeVersion": 4.2,
       "position": [
         420,
-        300
+        420
       ],
       "parameters": {
         "method": "GET",
@@ -56,103 +56,59 @@
       }
     },
     {
-      "id": "check-healthy",
-      "name": "All Services Healthy?",
+      "id": "code-trend",
+      "name": "Trend + Flap Detector",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        420
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const resp = $input.first().json || {};\nconst body = (resp.body && typeof resp.body === 'object') ? resp.body : resp;\nconst statusCode = Number(resp.statusCode ?? 200);\nconst svc = body.services || {};\nconst api_status = body.status ?? 'unknown';\nconst pg = svc.postgres ?? body.postgres ?? 'unknown';\nconst rd = svc.redis ?? body.redis ?? 'unknown';\nconst ol = svc.ollama ?? body.ollama ?? 'unknown';\n\nconst is_healthy = statusCode === 200 && (api_status === 'ok' || api_status === 'healthy');\nconst now_iso = new Date().toISOString();\n\nconst sd = $getWorkflowStaticData('global');\nconst history = Array.isArray(sd.history) ? sd.history.slice() : [];\nhistory.push({ ts: now_iso, healthy: is_healthy, statusCode, api_status, postgres: pg, redis: rd, ollama: ol });\nwhile (history.length > 96) history.shift();  // ~24h at 15m\nsd.history = history;\n\n// Last known good\nlet last_good = null;\nfor (let i = history.length - 1; i >= 0; i--) {\n  if (history[i].healthy && history[i].ts !== now_iso) { last_good = history[i].ts; break; }\n}\n\n// Service regression\nconst prev = history.length >= 2 ? history[history.length - 2] : null;\nconst regressed = [];\nif (prev) {\n  if (prev.postgres === 'ok' && pg !== 'ok') regressed.push('postgres');\n  if (prev.redis === 'ok' && rd !== 'ok') regressed.push('redis');\n  if (prev.ollama === 'ok' && ol !== 'ok') regressed.push('ollama');\n}\n\n// Flap detection over last hour (4 entries)\nconst window = history.slice(-4);\nlet transitions = 0;\nfor (let i = 1; i < window.length; i++) {\n  if (window[i].healthy !== window[i - 1].healthy) transitions += 1;\n}\nconst flapping = transitions >= 3;\n\nconst failed_services = [\n  pg !== 'ok' ? 'postgres' : null,\n  rd !== 'ok' ? 'redis' : null,\n  ol !== 'ok' ? 'ollama' : null,\n].filter(Boolean);\nif (!is_healthy && failed_services.length === 0) failed_services.push('api_unreachable');\n\nconst alert_required = (!is_healthy) || flapping;\nconst severity = !is_healthy ? 'critical' : (flapping ? 'warning' : 'info');\n\nconst slackPrefix = !is_healthy ? ':red_circle: *ModelForge Health FAILED*' : ':warning: *ModelForge Health Flapping*';\nconst slack_message = [\n  slackPrefix,\n  `\\u2022 Time: \\`${now_iso}\\``,\n  `\\u2022 HTTP: \\`${statusCode}\\` | API: \\`${api_status}\\``,\n  `\\u2022 Postgres: \\`${pg}\\` | Redis: \\`${rd}\\` | Ollama: \\`${ol}\\``,\n  `\\u2022 Failed: \\`${failed_services.join(', ') || 'none'}\\``,\n  regressed.length ? `\\u2022 Regressed since last check: \\`${regressed.join(', ')}\\`` : null,\n  flapping ? `\\u2022 Flapping: ${transitions} transitions in last hour` : null,\n  `\\u2022 Last known good: \\`${last_good ?? 'none in window'}\\``,\n].filter(Boolean).join('\\n');\n\nconsole.log('[health] sample', { is_healthy, flapping, transitions, regressed, failed_services });\n\nreturn [{\n  json: {\n    is_healthy,\n    flapping,\n    transitions,\n    alert_required,\n    severity,\n    statusCode,\n    api_status,\n    postgres: pg,\n    redis: rd,\n    ollama: ol,\n    failed_services,\n    failed_services_csv: failed_services.join(', '),\n    regressed,\n    regressed_csv: regressed.join(', '),\n    last_known_good: last_good,\n    history_len: history.length,\n    detected_at: now_iso,\n    slack_message,\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "if-alert",
+      "name": "Alert Required?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        640,
-        300
+        860,
+        420
       ],
       "parameters": {
         "conditions": {
           "options": {
-            "caseSensitive": false,
+            "caseSensitive": true,
             "leftValue": "",
             "typeValidation": "loose"
           },
           "conditions": [
             {
-              "id": "status-ok",
-              "leftValue": "={{ $json.body?.status ?? $json.status }}",
-              "rightValue": "ok",
+              "id": "alert-required",
+              "leftValue": "={{ $json.alert_required }}",
+              "rightValue": true,
               "operator": {
-                "type": "string",
-                "operation": "equals"
-              }
-            },
-            {
-              "id": "http-200",
-              "leftValue": "={{ $json.statusCode ?? 200 }}",
-              "rightValue": 200,
-              "operator": {
-                "type": "number",
-                "operation": "equals"
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
               }
             }
           ],
           "combinator": "and"
-        },
-        "options": {}
+        }
       }
     },
     {
-      "id": "log-healthy",
-      "name": "Record Healthy Heartbeat",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
-      "position": [
-        860,
-        200
-      ],
-      "parameters": {
-        "mode": "manual",
-        "duplicateItem": false,
-        "assignments": {
-          "assignments": [
-            {
-              "id": "1",
-              "name": "status",
-              "value": "healthy",
-              "type": "string"
-            },
-            {
-              "id": "2",
-              "name": "postgres",
-              "value": "={{ $json.body?.postgres ?? $json.postgres }}",
-              "type": "string"
-            },
-            {
-              "id": "3",
-              "name": "redis",
-              "value": "={{ $json.body?.redis ?? $json.redis }}",
-              "type": "string"
-            },
-            {
-              "id": "4",
-              "name": "version",
-              "value": "={{ $json.body?.version ?? $json.version }}",
-              "type": "string"
-            },
-            {
-              "id": "5",
-              "name": "checked_at",
-              "value": "={{ $now.toISO() }}",
-              "type": "string"
-            }
-          ]
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "post-heartbeat-api",
+      "id": "post-heartbeat",
       "name": "POST Heartbeat to API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
         1080,
-        200
+        540
       ],
       "parameters": {
         "method": "POST",
@@ -172,99 +128,25 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ alert_type: 'heartbeat', severity: 'info', api_status: 'ok', postgres_status: $json.postgres, redis_status: $json.redis, detected_at: $json.checked_at }) }}",
+        "jsonBody": "={{ JSON.stringify({ alert_type: 'heartbeat', severity: 'info', api_status: $json.api_status, postgres_status: $json.postgres, redis_status: $json.redis, ollama_status: $json.ollama, history_len: $json.history_len, detected_at: $json.detected_at }) }}",
         "options": {
-          "timeout": 5000
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
       }
     },
     {
-      "id": "diagnose-failure",
-      "name": "Diagnose Failure",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
-      "position": [
-        860,
-        420
-      ],
-      "parameters": {
-        "mode": "manual",
-        "duplicateItem": false,
-        "assignments": {
-          "assignments": [
-            {
-              "id": "1",
-              "name": "alert_type",
-              "value": "health_check_failed",
-              "type": "string"
-            },
-            {
-              "id": "2",
-              "name": "http_status_code",
-              "value": "={{ $json.statusCode ?? 'unreachable' }}",
-              "type": "string"
-            },
-            {
-              "id": "3",
-              "name": "api_status",
-              "value": "={{ $json.body?.status ?? $json.status ?? 'unknown' }}",
-              "type": "string"
-            },
-            {
-              "id": "4",
-              "name": "postgres_status",
-              "value": "={{ $json.body?.postgres ?? $json.postgres ?? 'unknown' }}",
-              "type": "string"
-            },
-            {
-              "id": "5",
-              "name": "redis_status",
-              "value": "={{ $json.body?.redis ?? $json.redis ?? 'unknown' }}",
-              "type": "string"
-            },
-            {
-              "id": "6",
-              "name": "env",
-              "value": "={{ $json.body?.env ?? $json.env ?? 'unknown' }}",
-              "type": "string"
-            },
-            {
-              "id": "7",
-              "name": "failed_services",
-              "value": "={{ [($json.body?.postgres ?? $json.postgres) !== 'ok' ? 'postgres' : null, ($json.body?.redis ?? $json.redis) !== 'ok' ? 'redis' : null].filter(Boolean).join(', ') || 'api_unreachable' }}",
-              "type": "string"
-            },
-            {
-              "id": "8",
-              "name": "slack_message",
-              "value": "=:red_circle: *ModelForge Health Check FAILED*\\n• Time: `{{ $now.toISO() }}`\\n• HTTP Status: `{{ $json.statusCode ?? 'unreachable' }}`\\n• API Status: `{{ $json.body?.status ?? 'unknown' }}`\\n• Postgres: `{{ $json.body?.postgres ?? $json.postgres ?? 'unknown' }}`\\n• Redis: `{{ $json.body?.redis ?? $json.redis ?? 'unknown' }}`\\n• Failed: `{{ [($json.body?.postgres ?? $json.postgres) !== 'ok' ? 'postgres' : null, ($json.body?.redis ?? $json.redis) !== 'ok' ? 'redis' : null].filter(Boolean).join(', ') || 'api_unreachable' }}`",
-              "type": "string"
-            },
-            {
-              "id": "9",
-              "name": "severity",
-              "value": "critical",
-              "type": "string"
-            },
-            {
-              "id": "10",
-              "name": "detected_at",
-              "value": "={{ $now.toISO() }}",
-              "type": "string"
-            }
-          ]
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "alert-failure",
+      "id": "slack-alert",
       "name": "Slack — Health Alert",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
         1080,
-        420
+        300
       ],
       "parameters": {
         "method": "POST",
@@ -283,13 +165,13 @@
       }
     },
     {
-      "id": "log-to-postgres",
+      "id": "post-alert-api",
       "name": "POST Alert to ModelForge API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
         1300,
-        420
+        300
       ],
       "parameters": {
         "method": "POST",
@@ -309,7 +191,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ alert_type: $json.alert_type, failed_services: $json.failed_services, http_status_code: $json.http_status_code, api_status: $json.api_status, postgres_status: $json.postgres_status, redis_status: $json.redis_status, severity: $json.severity, detected_at: $json.detected_at }) }}",
+        "jsonBody": "={{ JSON.stringify({ alert_type: $json.flapping ? 'health_flapping' : 'health_check_failed', severity: $json.severity, failed_services: $json.failed_services_csv, regressed_services: $json.regressed_csv, http_status_code: $json.statusCode, api_status: $json.api_status, postgres_status: $json.postgres, redis_status: $json.redis, ollama_status: $json.ollama, transitions_last_hour: $json.transitions, last_known_good: $json.last_known_good, detected_at: $json.detected_at }) }}",
         "options": {
           "timeout": 5000,
           "response": {
@@ -337,36 +219,36 @@
       "main": [
         [
           {
-            "node": "All Services Healthy?",
+            "node": "Trend + Flap Detector",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "All Services Healthy?": {
+    "Trend + Flap Detector": {
       "main": [
         [
           {
-            "node": "Record Healthy Heartbeat",
+            "node": "Alert Required?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Required?": {
+      "main": [
+        [
+          {
+            "node": "Slack — Health Alert",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Diagnose Failure",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Diagnose Failure": {
-      "main": [
-        [
-          {
-            "node": "Slack — Health Alert",
+            "node": "POST Heartbeat to API",
             "type": "main",
             "index": 0
           }
@@ -383,17 +265,6 @@
           }
         ]
       ]
-    },
-    "Record Healthy Heartbeat": {
-      "main": [
-        [
-          {
-            "node": "POST Heartbeat to API",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
     }
   },
   "settings": {
@@ -402,5 +273,5 @@
     "callerPolicy": "workflowsFromSameOwner"
   },
   "staticData": null,
-  "description": "Every 15m: GET /api/system/health; on success posts heartbeat to /api/system/alerts; on failure notifies Slack (SLACK_WEBHOOK_URL) and API."
+  "description": "Every 15m: GET /api/system/health, then maintains a rolling 24h history in workflow staticData. Detects per-service regressions, flapping (>=3 status transitions in last hour), and emits last-known-good with rich Slack + /api/system/alerts payloads. On healthy steady state, posts a lightweight heartbeat alert."
 }

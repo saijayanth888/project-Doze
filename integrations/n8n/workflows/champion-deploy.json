@@ -1,0 +1,395 @@
+{
+  "name": "Champion Deploy",
+  "active": false,
+  "nodes": [
+    {
+      "id": "webhook-deploy",
+      "name": "Champion Deployed Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        420
+      ],
+      "webhookId": "champion-deploy",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "champion-deployed",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "http://api:8000,http://n8n:5678"
+        }
+      }
+    },
+    {
+      "id": "respond-202",
+      "name": "Respond 202 Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        420,
+        420
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'accepted', received_at: $now.toISO() }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      }
+    },
+    {
+      "id": "code-normalize",
+      "name": "Normalize Trigger Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        420
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const root = $input.first().json || {};\nconst body = (root.body && typeof root.body === 'object') ? root.body : root;\nconsole.log('[champion-deploy] trigger payload', body);\nreturn [{ json: { ...body } }];\n"
+      }
+    },
+    {
+      "id": "get-champion",
+      "name": "GET Champion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/models/champion",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-verify",
+      "name": "Verify Thresholds",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        420
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const trigger = $('Normalize Trigger Payload').first().json || {};\nconst champion = $input.first().json || {};\n\nconst MIN = {\n  mmlu: 0.55,\n  arc_challenge: 0.50,\n  arc: 0.50,\n  hellaswag: 0.55,\n  gsm8k: 0.40,\n  humaneval: 0.30,\n};\n\nconst scores = champion.scores || champion.benchmark_scores || trigger.scores || {};\nconst failures = [];\nfor (const [k, min] of Object.entries(MIN)) {\n  if (k === 'arc' && scores.arc_challenge !== undefined) continue;\n  if (k === 'arc_challenge' && scores.arc_challenge === undefined && scores.arc !== undefined) {\n    const v = Number(scores.arc);\n    if (Number.isFinite(v) && v < min) failures.push({ benchmark: 'arc_challenge', score: v, min });\n    continue;\n  }\n  if (scores[k] === undefined) continue;\n  const v = Number(scores[k]);\n  if (Number.isFinite(v) && v < min) failures.push({ benchmark: k, score: v, min });\n}\n\nconst all_pass = failures.length === 0;\nconst championLabel = champion.model_id || champion.champion_model_id || trigger.champion_model_id || 'unknown';\nconst championGen = champion.generation ?? trigger.generation ?? 'n/a';\nconst run_id = champion.run_id || trigger.run_id;\n\nconst summary = Object.entries(scores)\n  .map(([k, v]) => `${k}=${Number(v).toFixed(3)}`)\n  .join(' ');\n\nconst slack_blocked = failures.length\n  ? `:no_entry: *Champion deployment blocked* — ${failures.map((f) => `${f.benchmark} ${f.score.toFixed(3)} < ${f.min}`).join(', ')}. Champion: \\`${championLabel}\\` (gen ${championGen}).`\n  : '';\nconst slack_deployed = `:white_check_mark: *Gen ${championGen} deployed as current-champion* — ${championLabel}. Scores: ${summary}.`;\n\nconst deploy_payload = JSON.stringify({\n  event: 'champion_ready',\n  run_id,\n  generation: championGen,\n  champion_model_id: championLabel,\n  scores,\n  deployed_at: new Date().toISOString(),\n});\nconst alert_payload = JSON.stringify({\n  alert_type: 'deployment',\n  severity: 'info',\n  champion: championGen,\n  champion_model_id: championLabel,\n  run_id,\n  scores,\n  detected_at: new Date().toISOString(),\n});\n\nconsole.log('[champion-deploy] verify', { all_pass, failures, championLabel, championGen });\n\nreturn [{\n  json: {\n    ...trigger,\n    champion: champion,\n    champion_label: championLabel,\n    champion_generation: championGen,\n    run_id,\n    scores,\n    failures,\n    failures_csv: failures.map((f) => `${f.benchmark}<${f.min}`).join(', '),\n    all_pass,\n    deployment_hook_set: !!$env.DEPLOYMENT_HOOK_URL,\n    slack_blocked,\n    slack_deployed,\n    deploy_payload,\n    alert_payload,\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "if-pass",
+      "name": "All Thresholds Pass?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "all-pass",
+              "leftValue": "={{ $json.all_pass }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "if-hook-set",
+      "name": "Deployment Hook Configured?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1520,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-hook",
+              "leftValue": "={{ ($env.DEPLOYMENT_HOOK_URL || '').length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "post-deploy-hook",
+      "name": "POST Deployment Hook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1740,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DEPLOYMENT_HOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.deploy_payload }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "post-deploy-alert",
+      "name": "POST Deployment Alert to API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1960,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/api/system/alerts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.alert_payload }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "slack-deployed",
+      "name": "Slack — Deployed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2180,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slack_deployed }) }}",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "slack-blocked",
+      "name": "Slack — Blocked",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1520,
+        540
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slack_blocked }) }}",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Champion Deployed Webhook": {
+      "main": [
+        [
+          {
+            "node": "Respond 202 Accepted",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Normalize Trigger Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Trigger Payload": {
+      "main": [
+        [
+          {
+            "node": "GET Champion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Champion": {
+      "main": [
+        [
+          {
+            "node": "Verify Thresholds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Thresholds": {
+      "main": [
+        [
+          {
+            "node": "All Thresholds Pass?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Thresholds Pass?": {
+      "main": [
+        [
+          {
+            "node": "Deployment Hook Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack — Blocked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deployment Hook Configured?": {
+      "main": [
+        [
+          {
+            "node": "POST Deployment Hook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "POST Deployment Alert to API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST Deployment Hook": {
+      "main": [
+        [
+          {
+            "node": "POST Deployment Alert to API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST Deployment Alert to API": {
+      "main": [
+        [
+          {
+            "node": "Slack — Deployed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "description": "Webhook POST /webhook/champion-deployed (called by Evolution Monitor on champion_promoted). Pulls /api/models/champion, gates on minimum thresholds (mmlu>0.55, arc>0.50, hellaswag>0.55, gsm8k>0.40, humaneval>0.30), then POSTs DEPLOYMENT_HOOK_URL (when set), POSTs a deployment alert to /api/system/alerts, and Slack-notifies success or block reason."
+}

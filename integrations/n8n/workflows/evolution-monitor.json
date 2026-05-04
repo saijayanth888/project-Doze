@@ -10,7 +10,7 @@
       "typeVersion": 2,
       "position": [
         200,
-        300
+        540
       ],
       "webhookId": "evolution-monitor",
       "parameters": {
@@ -29,7 +29,7 @@
       "typeVersion": 1,
       "position": [
         420,
-        300
+        540
       ],
       "parameters": {
         "respondWith": "json",
@@ -40,13 +40,27 @@
       }
     },
     {
+      "id": "code-normalize-payload",
+      "name": "Normalize Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        540
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const root = $input.first().json || {};\nconst payload = root.body && typeof root.body === 'object' ? root.body : root;\nconst event_type = payload.event_type ?? root.event_type ?? 'unknown';\nconst out = { ...payload, event_type, _received_at: new Date().toISOString() };\nconsole.log('[evolution-monitor] event', event_type, 'run', out.run_id);\nreturn [{ json: out }];\n"
+      }
+    },
+    {
       "id": "switch-event-type",
       "name": "Route by Event Type",
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3,
       "position": [
-        640,
-        300
+        860,
+        540
       ],
       "parameters": {
         "mode": "rules",
@@ -61,7 +75,7 @@
                 },
                 "conditions": [
                   {
-                    "leftValue": "={{ $json.body?.event_type ?? $json.event_type }}",
+                    "leftValue": "={{ $json.event_type }}",
                     "rightValue": "generation_complete",
                     "operator": {
                       "type": "string",
@@ -83,7 +97,7 @@
                 },
                 "conditions": [
                   {
-                    "leftValue": "={{ $json.body?.event_type ?? $json.event_type }}",
+                    "leftValue": "={{ $json.event_type }}",
                     "rightValue": "champion_promoted",
                     "operator": {
                       "type": "string",
@@ -105,7 +119,7 @@
                 },
                 "conditions": [
                   {
-                    "leftValue": "={{ $json.body?.event_type ?? $json.event_type }}",
+                    "leftValue": "={{ $json.event_type }}",
                     "rightValue": "run_complete",
                     "operator": {
                       "type": "string",
@@ -127,7 +141,7 @@
                 },
                 "conditions": [
                   {
-                    "leftValue": "={{ $json.body?.event_type ?? $json.event_type }}",
+                    "leftValue": "={{ $json.event_type }}",
                     "rightValue": "error",
                     "operator": {
                       "type": "string",
@@ -147,74 +161,84 @@
       }
     },
     {
-      "id": "set-generation-log",
-      "name": "Log Generation Complete",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
+      "id": "code-track-discards",
+      "name": "Track Consecutive Discards",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
-        860,
+        1080,
         100
       ],
       "parameters": {
-        "mode": "manual",
-        "duplicateItem": false,
-        "assignments": {
-          "assignments": [
-            {
-              "id": "1",
-              "name": "notification_type",
-              "value": "generation_complete",
-              "type": "string"
-            },
-            {
-              "id": "2",
-              "name": "generation_number",
-              "value": "={{ $json.generation_number }}",
-              "type": "number"
-            },
-            {
-              "id": "3",
-              "name": "best_score",
-              "value": "={{ $json.best_score ?? $json.scores?.best ?? 'N/A' }}",
-              "type": "string"
-            },
-            {
-              "id": "4",
-              "name": "avg_score",
-              "value": "={{ $json.avg_score ?? $json.scores?.avg ?? 'N/A' }}",
-              "type": "string"
-            },
-            {
-              "id": "5",
-              "name": "model_id",
-              "value": "={{ $json.model_id ?? $json.run_id }}",
-              "type": "string"
-            },
-            {
-              "id": "6",
-              "name": "slack_message",
-              "value": "=*Generation {{ $json.generation_number }} complete* | Best: `{{ $json.best_score ?? 'N/A' }}` | Avg: `{{ $json.avg_score ?? 'N/A' }}` | Run: `{{ $json.run_id }}`",
-              "type": "string"
-            },
-            {
-              "id": "7",
-              "name": "timestamp",
-              "value": "={{ $now.toISO() }}",
-              "type": "string"
-            }
-          ]
-        },
-        "options": {}
+        "language": "javaScript",
+        "jsCode": "const ev = $input.first().json || {};\nconst sd = $getWorkflowStaticData('global');\nconst decision = String(ev.decision || '').toLowerCase();\nconst gen = Number(ev.generation_number ?? ev.generation ?? 0);\n\nlet streak = Number(sd.consecutive_discards || 0);\nif (decision === 'discard') {\n  streak += 1;\n} else {\n  streak = 0;\n}\nsd.consecutive_discards = streak;\nsd.last_decision = decision;\nsd.last_generation = gen;\n\nconst stuck = streak >= 3;\nconst slackText = stuck\n  ? `:red_circle: *ModelForge: Stuck* — ${streak} consecutive discards (last gen ${gen}). Consider: increase training data, change LR, or target different categories.`\n  : `*Generation ${gen} complete* | decision: \\`${decision || 'unknown'}\\` | best=${ev.best_score ?? 'N/A'} | avg=${ev.avg_score ?? ev.champion_avg ?? 'N/A'} | run=\\`${ev.run_id}\\``;\n\nconsole.log('[evolution-monitor] discards', { streak, decision, stuck });\n\nreturn [{ json: { ...ev, consecutive_discards: streak, stuck, slack_message: slackText } }];\n"
       }
     },
     {
-      "id": "notify-generation",
+      "id": "if-stuck",
+      "name": "Stuck (3+ discards)?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "stuck",
+              "leftValue": "={{ $json.stuck }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "slack-stuck",
+      "name": "Slack — Stuck Warning",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1520,
+        20
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slack_message }) }}",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "slack-gen-log",
       "name": "Slack — Generation Log",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1080,
-        100
+        1520,
+        180
       ],
       "parameters": {
         "method": "POST",
@@ -233,74 +257,90 @@
       }
     },
     {
-      "id": "set-champion-log",
-      "name": "Log Champion Promoted",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
-      "position": [
-        860,
-        260
-      ],
-      "parameters": {
-        "mode": "manual",
-        "duplicateItem": false,
-        "assignments": {
-          "assignments": [
-            {
-              "id": "1",
-              "name": "notification_type",
-              "value": "champion_promoted",
-              "type": "string"
-            },
-            {
-              "id": "2",
-              "name": "champion_model_id",
-              "value": "={{ $json.champion_model_id ?? $json.model_id }}",
-              "type": "string"
-            },
-            {
-              "id": "3",
-              "name": "generation",
-              "value": "={{ $json.generation_number }}",
-              "type": "number"
-            },
-            {
-              "id": "4",
-              "name": "score",
-              "value": "={{ $json.score ?? $json.fitness_score }}",
-              "type": "string"
-            },
-            {
-              "id": "5",
-              "name": "previous_champion",
-              "value": "={{ $json.previous_champion ?? 'none' }}",
-              "type": "string"
-            },
-            {
-              "id": "6",
-              "name": "slack_message",
-              "value": "=*Champion promoted* | Model: `{{ $json.champion_model_id ?? $json.model_id }}` | Score: `{{ $json.score ?? $json.champion_avg ?? $json.fitness_score }}` | Gen: `{{ $json.generation_number }}`",
-              "type": "string"
-            },
-            {
-              "id": "7",
-              "name": "timestamp",
-              "value": "={{ $now.toISO() }}",
-              "type": "string"
-            }
-          ]
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "notify-champion",
-      "name": "Slack — Champion Alert",
+      "id": "champion-get-scores",
+      "name": "GET Eval Scores (champion)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
         1080,
-        260
+        380
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/eval/scores",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-perf-analysis",
+      "name": "Performance Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        380
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Combine the original webhook event (still on item 0 of the champion branch)\n// with the eval scores fetched in the previous node.\nconst event = $('Normalize Payload').first().json || {};\nconst scoresResp = $input.first().json || {};\nconst trends = Array.isArray(scoresResp)\n  ? scoresResp\n  : Array.isArray(scoresResp.trends)\n  ? scoresResp.trends\n  : Array.isArray(scoresResp.scores)\n  ? scoresResp.scores\n  : [];\n\n// Build per-generation per-benchmark map for promoted gens.\nconst byGen = {};\nfor (const t of trends) {\n  if (!t || !t.promoted) continue;\n  const gen = Number(t.generation);\n  if (!Number.isFinite(gen)) continue;\n  if (!byGen[gen]) byGen[gen] = {};\n  byGen[gen][t.benchmark] = Number(t.score ?? t.child_score ?? 0);\n}\n\nconst promotedGens = Object.keys(byGen).map(Number).sort((a, b) => b - a);\nconst latest = byGen[promotedGens[0]] || {};\nconst prev = byGen[promotedGens[1]] || {};\n\nconst movers = [];\nfor (const k of Object.keys(latest)) {\n  const cur = latest[k];\n  const old = prev[k];\n  if (Number.isFinite(old)) movers.push({ benchmark: k, delta: cur - old, current: cur });\n}\nmovers.sort((a, b) => b.delta - a.delta);\n\nconst regressions = movers.filter((m) => m.delta < -0.005);\nconst hasRegression = regressions.length > 0;\nconst topMover = movers[0];\n\nconst latestAvg = Object.values(latest).length\n  ? Object.values(latest).reduce((a, b) => a + b, 0) / Object.values(latest).length\n  : (event.champion_avg ?? null);\nconst prevAvg = Object.values(prev).length\n  ? Object.values(prev).reduce((a, b) => a + b, 0) / Object.values(prev).length\n  : null;\nconst overallDelta = latestAvg !== null && prevAvg !== null ? latestAvg - prevAvg : null;\n\nconst genNum = Number(event.generation_number ?? event.generation ?? promotedGens[0] ?? 0);\nconst regBenches = regressions.map((r) => `${r.benchmark} ${(r.delta * 100).toFixed(1)}%`).join(', ');\nconst topMoverStr = topMover ? `${topMover.benchmark} ${(topMover.delta * 100).toFixed(1)}%` : 'n/a';\nconst overallStr = overallDelta !== null ? `${(overallDelta * 100).toFixed(2)}%` : 'n/a';\n\nconst slack_ok = `:trophy: *Gen ${genNum} is new champion* — avg ${latestAvg !== null ? latestAvg.toFixed(4) : 'n/a'} (\\u0394 ${overallStr}). Top mover: ${topMoverStr}. All benchmarks improved or held.`;\nconst slack_warn = `:warning: *Gen ${genNum} promoted with regression* on ${regBenches}. Overall \\u0394 ${overallStr}. Top mover: ${topMoverStr}.`;\n\nconsole.log('[evolution-monitor] champion analysis', { genNum, hasRegression, overallDelta, regBenches, topMoverStr });\n\nreturn [{\n  json: {\n    ...event,\n    latest_scores: latest,\n    prev_scores: prev,\n    movers,\n    regressions,\n    has_regression: hasRegression,\n    overall_delta: overallDelta,\n    latest_avg: latestAvg,\n    slack_message: hasRegression ? slack_warn : slack_ok,\n    slack_message_ok: slack_ok,\n    slack_message_warn: slack_warn,\n    deploy_payload_json: JSON.stringify({\n      event_type: 'champion_deployed_request',\n      run_id: event.run_id,\n      generation: genNum,\n      champion_model_id: event.champion_model_id,\n      scores: latest,\n      avg: latestAvg,\n    }),\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "if-regression",
+      "name": "Regression Detected?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1520,
+        380
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-regression",
+              "leftValue": "={{ $json.has_regression }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "slack-champion-warn",
+      "name": "Slack — Champion (regression)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1740,
+        300
       ],
       "parameters": {
         "method": "POST",
@@ -319,80 +359,108 @@
       }
     },
     {
-      "id": "set-run-summary",
-      "name": "Build Run Summary",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
+      "id": "slack-champion-ok",
+      "name": "Slack — Champion (clean)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
-        860,
-        420
+        1740,
+        460
       ],
       "parameters": {
-        "mode": "manual",
-        "duplicateItem": false,
-        "assignments": {
-          "assignments": [
-            {
-              "id": "1",
-              "name": "notification_type",
-              "value": "run_complete",
-              "type": "string"
-            },
-            {
-              "id": "2",
-              "name": "run_id",
-              "value": "={{ $json.run_id }}",
-              "type": "string"
-            },
-            {
-              "id": "3",
-              "name": "total_generations",
-              "value": "={{ $json.total_generations ?? $json.generation_number }}",
-              "type": "number"
-            },
-            {
-              "id": "4",
-              "name": "best_score",
-              "value": "={{ $json.best_score }}",
-              "type": "string"
-            },
-            {
-              "id": "5",
-              "name": "champion_model_id",
-              "value": "={{ $json.champion_model_id }}",
-              "type": "string"
-            },
-            {
-              "id": "6",
-              "name": "duration_seconds",
-              "value": "={{ $json.duration_seconds }}",
-              "type": "number"
-            },
-            {
-              "id": "7",
-              "name": "slack_message",
-              "value": "=*Evolution run complete*\\n• Run ID: `{{ $json.run_id }}`\\n• Generations: `{{ $json.total_generations }}`\\n• Best score: `{{ $json.best_score }}`\\n• Champion: `{{ $json.champion_model_id }}`\\n• Duration: `{{ Math.round(($json.duration_seconds ?? 0) / 60) }}m`",
-              "type": "string"
-            },
-            {
-              "id": "8",
-              "name": "timestamp",
-              "value": "={{ $now.toISO() }}",
-              "type": "string"
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slack_message }) }}",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "neverError": true
             }
-          ]
-        },
-        "options": {}
+          }
+        }
       }
     },
     {
-      "id": "notify-run-complete",
+      "id": "trigger-deploy",
+      "name": "Trigger Champion Deploy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1520,
+        540
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://n8n:5678/webhook/champion-deployed",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.deploy_payload_json }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "run-get-lineage",
+      "name": "GET Lineage Tree (run)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1080,
+        700
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/lineage/tree",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-run-summary",
+      "name": "Build Run Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        700
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const event = $('Normalize Payload').first().json || {};\nconst lineage = $input.first().json || {};\nconst nodes = Array.isArray(lineage.nodes) ? lineage.nodes : [];\n\nconst myRun = nodes.filter((n) => n && n.run_id === event.run_id);\nconst sample = myRun.length ? myRun : nodes;\nlet promoted = 0;\nlet discarded = 0;\nlet bestImp = -Infinity;\nlet worstReg = Infinity;\nlet startScore = null;\nlet endScore = null;\nconst scoreSeries = [];\nfor (const n of sample) {\n  const decision = String(n.decision || (n.promoted ? 'promote' : 'discard')).toLowerCase();\n  if (decision === 'promote') promoted += 1;\n  else if (decision === 'discard') discarded += 1;\n  const avg = Number(n.avg_score ?? n.champion_avg ?? n.score);\n  if (Number.isFinite(avg)) {\n    scoreSeries.push({ gen: Number(n.generation), avg });\n  }\n}\nscoreSeries.sort((a, b) => a.gen - b.gen);\nif (scoreSeries.length) {\n  startScore = scoreSeries[0].avg;\n  endScore = scoreSeries[scoreSeries.length - 1].avg;\n  for (let i = 1; i < scoreSeries.length; i++) {\n    const d = scoreSeries[i].avg - scoreSeries[i - 1].avg;\n    if (d > bestImp) bestImp = d;\n    if (d < worstReg) worstReg = d;\n  }\n}\n\nconst total = promoted + discarded;\nconst rate = total > 0 ? (promoted / total) : 0;\nconst dur = Number(event.duration_seconds || 0);\nconst minutes = Math.round(dur / 60);\nconst totalGens = Number(event.total_generations ?? event.generation_number ?? scoreSeries.length);\n\nconst slack_message = [\n  `:checkered_flag: *Run complete* \\`${event.run_id}\\``,\n  `\\u2022 Generations: ${totalGens} (\\u2705 ${promoted} promoted / \\u26d4 ${discarded} discarded, rate ${(rate * 100).toFixed(1)}%)`,\n  `\\u2022 Score: start ${startScore !== null ? startScore.toFixed(4) : 'n/a'} \\u2192 end ${endScore !== null ? endScore.toFixed(4) : 'n/a'}`,\n  `\\u2022 Best gen-over-gen: ${bestImp === -Infinity ? 'n/a' : (bestImp * 100).toFixed(2) + '%'} | Worst: ${worstReg === Infinity ? 'n/a' : (worstReg * 100).toFixed(2) + '%'}`,\n  `\\u2022 Champion: \\`${event.champion_model_id ?? 'n/a'}\\``,\n  `\\u2022 Duration: ${minutes}m`,\n].join('\\n');\n\nconsole.log('[evolution-monitor] run summary', { run_id: event.run_id, totalGens, promoted, discarded, rate });\n\nreturn [{\n  json: {\n    ...event,\n    promoted,\n    discarded,\n    promotion_rate: rate,\n    best_improvement: bestImp,\n    worst_regression: worstReg,\n    start_score: startScore,\n    end_score: endScore,\n    slack_message,\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "slack-run-summary",
       "name": "Slack — Run Summary",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1080,
-        420
+        1520,
+        700
       ],
       "parameters": {
         "method": "POST",
@@ -411,86 +479,115 @@
       }
     },
     {
-      "id": "set-error-alert",
-      "name": "Build Error Alert",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
+      "id": "code-error-severity",
+      "name": "Error Severity Classifier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
-        860,
-        580
+        1080,
+        980
       ],
       "parameters": {
-        "mode": "manual",
-        "duplicateItem": false,
-        "assignments": {
-          "assignments": [
-            {
-              "id": "1",
-              "name": "notification_type",
-              "value": "error",
-              "type": "string"
-            },
-            {
-              "id": "2",
-              "name": "error_code",
-              "value": "={{ $json.error_code ?? 'UNKNOWN' }}",
-              "type": "string"
-            },
-            {
-              "id": "3",
-              "name": "error_message",
-              "value": "={{ $json.error_message ?? $json.message ?? 'No details' }}",
-              "type": "string"
-            },
-            {
-              "id": "4",
-              "name": "run_id",
-              "value": "={{ $json.run_id ?? 'unknown' }}",
-              "type": "string"
-            },
-            {
-              "id": "5",
-              "name": "generation",
-              "value": "={{ $json.generation_number ?? 'unknown' }}",
-              "type": "string"
-            },
-            {
-              "id": "6",
-              "name": "stack_trace",
-              "value": "={{ $json.stack_trace ?? $json.traceback ?? '' }}",
-              "type": "string"
-            },
-            {
-              "id": "7",
-              "name": "slack_message",
-              "value": "=*Evolution error*\\n• Run: `{{ $json.run_id ?? 'unknown' }}`\\n• Code: `{{ $json.error_code ?? 'UNKNOWN' }}`\\n• Message: `{{ $json.error_message ?? $json.message }}`\\n• Generation: `{{ $json.generation_number ?? 'N/A' }}`",
-              "type": "string"
-            },
-            {
-              "id": "8",
-              "name": "severity",
-              "value": "critical",
-              "type": "string"
-            },
-            {
-              "id": "9",
-              "name": "timestamp",
-              "value": "={{ $now.toISO() }}",
-              "type": "string"
-            }
-          ]
-        },
-        "options": {}
+        "language": "javaScript",
+        "jsCode": "const ev = $input.first().json || {};\nconst raw = String(ev.error_message ?? ev.message ?? ev.error ?? '').toLowerCase();\nlet severity = 'error';\nlet hint = 'See run logs for details.';\nif (/oom|out of memory|cuda out of memory|memory_oom/.test(raw)) {\n  severity = 'critical';\n  hint = 'Reduce batch_size, gradient_accumulation_steps, or model size.';\n} else if (/timeout|timed out|deadline/.test(raw)) {\n  severity = 'warning';\n  hint = 'Increase timeout or reduce eval scope (quick_eval).';\n} else if (/connection refused|connect timeout|connection reset|econnref|no route to host|name or service not known/.test(raw)) {\n  severity = 'warning';\n  hint = 'Check Ollama / API / DB connectivity.';\n}\n\nconst is_critical = severity === 'critical';\nconst slackPrefix = is_critical ? ':red_circle: *CRITICAL*' : (severity === 'warning' ? ':warning: *Warning*' : ':bangbang: *Error*');\nconst slack_message = `${slackPrefix} run \\`${ev.run_id ?? 'unknown'}\\` gen=${ev.generation_number ?? ev.generation ?? 'n/a'} | ${ev.error_message ?? ev.message ?? 'no message'} | ${hint}${is_critical ? '\\nRun will be stopped.' : ''}`;\n\nconsole.log('[evolution-monitor] error severity', { severity, is_critical });\n\nreturn [{ json: { ...ev, severity, is_critical, hint, slack_message } }];\n"
       }
     },
     {
-      "id": "notify-error",
-      "name": "Slack — Error Alert",
+      "id": "if-critical",
+      "name": "Critical?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        980
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "is-critical",
+              "leftValue": "={{ $json.is_critical }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "post-evolve-stop",
+      "name": "POST Evolve Stop",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1080,
-        580
+        1520,
+        900
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=http://api:8000/api/evolve/{{ $json.run_id }}/stop",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "slack-error-critical",
+      "name": "Slack — Error (critical)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1740,
+        900
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slack_message }) }}",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "slack-error-warn",
+      "name": "Slack — Error (non-critical)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1520,
+        1060
       ],
       "parameters": {
         "method": "POST",
@@ -514,8 +611,8 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        860,
-        740
+        1080,
+        1240
       ],
       "parameters": {
         "mode": "manual",
@@ -562,6 +659,17 @@
             "index": 0
           },
           {
+            "node": "Normalize Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Payload": {
+      "main": [
+        [
+          {
             "node": "Route by Event Type",
             "type": "main",
             "index": 0
@@ -573,28 +681,28 @@
       "main": [
         [
           {
-            "node": "Log Generation Complete",
+            "node": "Track Consecutive Discards",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Log Champion Promoted",
+            "node": "GET Eval Scores (champion)",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Build Run Summary",
+            "node": "GET Lineage Tree (run)",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Build Error Alert",
+            "node": "Error Severity Classifier",
             "type": "main",
             "index": 0
           }
@@ -608,8 +716,26 @@
         ]
       ]
     },
-    "Log Generation Complete": {
+    "Track Consecutive Discards": {
       "main": [
+        [
+          {
+            "node": "Stuck (3+ discards)?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stuck (3+ discards)?": {
+      "main": [
+        [
+          {
+            "node": "Slack — Stuck Warning",
+            "type": "main",
+            "index": 0
+          }
+        ],
         [
           {
             "node": "Slack — Generation Log",
@@ -619,11 +745,56 @@
         ]
       ]
     },
-    "Log Champion Promoted": {
+    "GET Eval Scores (champion)": {
       "main": [
         [
           {
-            "node": "Slack — Champion Alert",
+            "node": "Performance Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Performance Analysis": {
+      "main": [
+        [
+          {
+            "node": "Regression Detected?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Trigger Champion Deploy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Regression Detected?": {
+      "main": [
+        [
+          {
+            "node": "Slack — Champion (regression)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack — Champion (clean)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Lineage Tree (run)": {
+      "main": [
+        [
+          {
+            "node": "Build Run Summary",
             "type": "main",
             "index": 0
           }
@@ -641,11 +812,40 @@
         ]
       ]
     },
-    "Build Error Alert": {
+    "Error Severity Classifier": {
       "main": [
         [
           {
-            "node": "Slack — Error Alert",
+            "node": "Critical?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Critical?": {
+      "main": [
+        [
+          {
+            "node": "POST Evolve Stop",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack — Error (non-critical)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST Evolve Stop": {
+      "main": [
+        [
+          {
+            "node": "Slack — Error (critical)",
             "type": "main",
             "index": 0
           }
@@ -660,5 +860,5 @@
     "callerPolicy": "workflowsFromSameOwner"
   },
   "staticData": null,
-  "description": "Production webhook for ModelForge evolution events (POST /webhook/evolution-events). Optional Slack via SLACK_WEBHOOK_URL. CORS allows http://api:8000 only (Docker API → n8n)."
+  "description": "Production webhook for ModelForge evolution events (POST /webhook/evolution-events). Routes by event_type and adds intelligence: champion_promoted (regression-aware Slack + cross-workflow champion-deploy trigger), generation_complete (consecutive-discard streak detection via staticData), run_complete (lineage-driven rich Slack summary), error (severity classifier — auto-stops on OOM, warns on timeouts/connection issues). CORS allows http://api:8000 only."
 }

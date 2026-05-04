@@ -85,10 +85,24 @@ If `docker ps` shows **two** host bindings for n8n (e.g. both **5678** and **567
 
 | File | Role |
 | ---- | ---- |
-| `evolution-monitor.json` | Webhook `POST /webhook/evolution-events` — routes `generation_complete`, `champion_promoted`, `run_complete`, `error`. Response body echoes `event_type` + timestamp. |
-| `evolution-scheduler.json` | Every 6h: `GET /api/evolve/status` — skips start when `is_running`; else `GET /api/system/gpu`; if GPU available, `POST /api/evolve/start` with body from `$env.EVOLUTION_BASE_MODEL` / `$env.EVOLUTION_MAX_GENS`. |
-| `health-check-monitor.json` | Every 15m: `GET /api/system/health`; healthy branch posts `heartbeat` to `/api/system/alerts`; failures Slack + API alert. |
-| `error-handler.json` | **Error workflow** (import, then assign as global error workflow in n8n Settings): `errorTrigger` → `POST /api/system/alerts` with `alert_type: workflow_error`. |
+| `evolution-monitor.json` | Webhook `POST /webhook/evolution-events`. Routes by `event_type` and adds intelligence: **champion_promoted** (regression-aware Slack + cross-workflow `POST /webhook/champion-deployed` trigger), **generation_complete** (consecutive-discard streak detection via `staticData`), **run_complete** (lineage-driven rich Slack summary), **error** (severity classifier — auto-stops on OOM, warns on timeouts/connection issues). Responds 202. |
+| `evolution-scheduler.json` | Every 6h. Skips when a run is already in flight. **GPU preflight** (avail / temp <80°C / mem <50%) and **plateau analysis** over last promoted gens; raises `max_generations` and `max_samples` adaptively. Slack-notifies started vs skip reasons when `SLACK_WEBHOOK_URL` is set. |
+| `health-check-monitor.json` | Every 15m. Maintains a rolling 24h history in workflow `staticData`; detects per-service regressions, **flapping** (>=3 transitions in last hour), and reports last-known-good with rich Slack + `/api/system/alerts` payloads. Heartbeat alert on healthy steady state. |
+| `error-handler.json` | **Error workflow** (import then assign as global error workflow in n8n Settings). Extracts workflow/node/execution context, classifies severity (OOM=critical, timeouts/conn=warning), POSTs `workflow_error` alert to `/api/system/alerts`, and Slack-notifies when `SLACK_WEBHOOK_URL` is set. |
+| `daily-report.json` | Daily 09:00 cron. Pulls champion / scores / lineage / GPU; classifies trend (improving / plateau / regressing); estimates storage; computes 24h promoted/discarded; emits a recommendation; Slack digest. |
+| `drift-detection.json` | Every 2h. Skips when training is in progress. Pulls `/api/lineage/tree`, finds last two promoted gens, calls `/api/eval/drift/{a}/{b}`, classifies score (minimal/moderate/significant) and Slack-alerts on **significant** drift only. |
+| `champion-deploy.json` | Webhook `POST /webhook/champion-deployed` (called by Evolution Monitor on `champion_promoted`). Pulls `/api/models/champion`, gates on minimum benchmark thresholds (`mmlu>0.55, arc>0.50, hellaswag>0.55, gsm8k>0.40, humaneval>0.30`); on pass POSTs `DEPLOYMENT_HOOK_URL` (when set) and `/api/system/alerts` with `alert_type: deployment`; Slack-notifies success or block reason. |
+| `weekly-summary.json` | Monday 08:00 cron. Slack-only weekly digest with promotion rate, week-over-week per-benchmark deltas, training hours, best single-gen improvement, top weakness categories, and lineage depth. |
+
+### Cross-workflow triggers
+
+- **Evolution Monitor → Champion Deploy**: on `champion_promoted` the monitor `POST`s the deploy webhook at `http://n8n:5678/webhook/champion-deployed` so the deploy workflow runs threshold checks and (optionally) dispatches `DEPLOYMENT_HOOK_URL`.
+
+### Additional environment variables
+
+| Variable | Purpose |
+| -------- | ------- |
+| `DEPLOYMENT_HOOK_URL` | Optional. Generic deployment webhook called by `champion-deploy.json` when all benchmark thresholds pass. Receives `{event:"champion_ready", run_id, generation, champion_model_id, scores, deployed_at}`. |
 
 ## FastAPI → n8n
 
@@ -129,11 +143,10 @@ The JSON directory is bind-mounted read-only in `docker-compose.yml`. Import is 
 
 ## Optional workflows (build in UI or extend exports)
 
-These are not shipped as JSON (they vary heavily by Slack app / CD URL); sketch them in n8n from the bundled patterns:
+These are not shipped as JSON (they vary heavily by Slack app / external surface); sketch them in n8n from the bundled patterns:
 
-- **Weekly digest** — Weekly schedule → `GET /api/lineage/tree` + `GET /api/evolution/generations` → Code (Markdown) → Slack.
 - **Slack slash `/infer`** — Slack webhook + signing secret → `POST /api/infer` → Slack response URL.
-- **Deployment promotion** — Subscribe to `champion_promoted` (duplicate webhook or sub-workflow) → IF `champion_avg >= $env.PROMOTE_MIN_SCORE` → `POST $env.DEPLOYMENT_HOOK_URL`.
 - **Model registry tag** — On `champion_promoted` → `GET /api/models/champion` → annotate external registry (HTTP / your CMDB).
+- **GitHub weekly issue** — Wrap `weekly-summary.json` to `POST` the markdown body to `/repos/{owner}/{repo}/issues` when `GITHUB_TOKEN` is set.
 
 When `N8N_WEBHOOK_SECRET` is set on the API, add a **Code** node immediately after the Evolution Monitor webhook to verify `X-Webhook-Signature`: compute `sha256=HMAC-SHA256(secret, event_type + '|' + run_id + '|' + generation)` and compare to the header (reject with `Respond to Webhook` **401** if mismatch).

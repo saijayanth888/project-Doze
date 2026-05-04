@@ -1,0 +1,308 @@
+{
+  "name": "Daily Performance Report",
+  "active": false,
+  "nodes": [
+    {
+      "id": "cron-9am",
+      "name": "Daily 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        420
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "get-champion",
+      "name": "GET Champion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        420,
+        420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/models/champion",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "get-scores",
+      "name": "GET Eval Scores",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/eval/scores",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "get-lineage",
+      "name": "GET Lineage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/lineage/tree",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "get-gpu",
+      "name": "GET GPU",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1080,
+        420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/system/gpu",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-build-report",
+      "name": "Build Daily Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        420
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const champion = $('GET Champion').first().json || {};\nconst scoresResp = $('GET Eval Scores').first().json || {};\nconst lineage = $('GET Lineage').first().json || {};\nconst gpu = $input.first().json || {};\n\nconst trends = Array.isArray(scoresResp)\n  ? scoresResp\n  : Array.isArray(scoresResp.trends)\n  ? scoresResp.trends\n  : Array.isArray(scoresResp.scores)\n  ? scoresResp.scores\n  : [];\nconst nodes = Array.isArray(lineage.nodes) ? lineage.nodes : [];\n\nconst now = new Date();\nconst since = new Date(now.getTime() - 24 * 3600 * 1000);\nconst recent = nodes.filter((n) => {\n  const ts = n.created_at || n.completed_at || n.timestamp;\n  if (!ts) return false;\n  const t = new Date(ts);\n  return Number.isFinite(t.valueOf()) && t >= since;\n});\n\nlet promoted24h = 0;\nlet discarded24h = 0;\nfor (const n of recent) {\n  const decision = String(n.decision || (n.promoted ? 'promote' : 'discard')).toLowerCase();\n  if (decision === 'promote') promoted24h += 1;\n  else if (decision === 'discard') discarded24h += 1;\n}\nconst total24h = promoted24h + discarded24h;\n\n// Champion scores per benchmark — try champion.scores or latest promoted gen.\nlet champScores = champion.scores || champion.benchmark_scores || {};\nif (!champScores || Object.keys(champScores).length === 0) {\n  const promotedTrends = trends.filter((t) => t.promoted);\n  if (promotedTrends.length) {\n    const maxGen = Math.max(...promotedTrends.map((t) => Number(t.generation) || 0));\n    champScores = {};\n    for (const t of promotedTrends.filter((t) => Number(t.generation) === maxGen)) {\n      champScores[t.benchmark] = Number(t.score ?? t.child_score ?? 0);\n    }\n  }\n}\nconst champEntries = Object.entries(champScores).filter(([, v]) => Number.isFinite(Number(v)));\nconst champAvg = champEntries.length\n  ? champEntries.reduce((a, [, v]) => a + Number(v), 0) / champEntries.length\n  : (Number(champion.avg_score) || null);\nlet weakest = null;\nfor (const [k, v] of champEntries) {\n  if (!weakest || Number(v) < weakest.score) weakest = { benchmark: k, score: Number(v) };\n}\n\n// Trend classification — last 5 promoted gen averages.\nconst promotedByGen = {};\nfor (const t of trends) {\n  if (!t || !t.promoted) continue;\n  const gen = Number(t.generation);\n  if (!Number.isFinite(gen)) continue;\n  if (!promotedByGen[gen]) promotedByGen[gen] = [];\n  promotedByGen[gen].push(Number(t.score ?? t.child_score ?? 0));\n}\nconst genAvgs = Object.entries(promotedByGen)\n  .map(([g, arr]) => ({ gen: Number(g), avg: arr.reduce((a, b) => a + b, 0) / arr.length }))\n  .sort((a, b) => b.gen - a.gen)\n  .slice(0, 5);\nlet trend = 'unknown';\nif (genAvgs.length >= 3) {\n  const delta = genAvgs[0].avg - genAvgs[Math.min(2, genAvgs.length - 1)].avg;\n  if (delta > 0.005) trend = 'improving';\n  else if (delta < -0.005) trend = 'regressing';\n  else trend = 'plateau';\n}\n\nconst adapterCount = nodes.length || promoted24h;\nconst storageGb = (adapterCount * 0.5).toFixed(1);\n\nconst gpuTemp = gpu.temperature ?? 'n/a';\nconst gpuUtil = gpu.gpu_utilization ?? gpu.utilization ?? 'n/a';\nconst gpuMemUsed = gpu.memory_used ?? 'n/a';\nconst gpuMemTotal = gpu.memory_total ?? 'n/a';\n\nlet recommendation = 'Keep evolving.';\nif (trend === 'plateau') recommendation = 'Plateau detected — increase training data or change LoRA rank/lr.';\nelse if (trend === 'regressing') recommendation = 'Regression — review weak categories and consider rolling back.';\nif (adapterCount > 80) recommendation += ' Disk cleanup likely needed.';\n\nconst date = now.toISOString().slice(0, 10);\nconst championLabel = champion.model_id || champion.champion_model_id || 'unknown';\nconst championGen = champion.generation ?? champion.gen ?? 'n/a';\n\nconst report = [\n  `:bar_chart: *ModelForge Daily Report* — ${date}`,\n  '\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501',\n  `:trophy: Champion: \\`${championLabel}\\` (gen ${championGen}, avg ${champAvg !== null ? champAvg.toFixed(4) : 'n/a'})`,\n  `:chart_with_upwards_trend: Trend: *${trend}*`,\n  `:wrench: 24h: ${total24h} generations (${promoted24h} promoted / ${discarded24h} discarded)`,\n  `:dart: Weakest benchmark: \\`${weakest ? weakest.benchmark : 'n/a'}\\` (${weakest ? weakest.score.toFixed(4) : 'n/a'})`,\n  `:floppy_disk: Storage: ${adapterCount} lineage nodes (~${storageGb} GB est.)`,\n  `:thermometer: GPU: ${gpuTemp}\\u00b0C, util ${gpuUtil}%, mem ${gpuMemUsed}/${gpuMemTotal}`,\n  '\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501',\n  `:bulb: Recommendation: ${recommendation}`,\n].join('\\n');\n\nconsole.log('[daily-report]', { date, trend, total24h, promoted24h, discarded24h });\n\nreturn [{\n  json: {\n    date,\n    champion_model_id: championLabel,\n    champion_generation: championGen,\n    champion_avg: champAvg,\n    trend,\n    total_24h: total24h,\n    promoted_24h: promoted24h,\n    discarded_24h: discarded24h,\n    weakest,\n    adapter_count: adapterCount,\n    storage_gb: storageGb,\n    gpu_temp: gpuTemp,\n    gpu_util: gpuUtil,\n    gpu_mem_used: gpuMemUsed,\n    gpu_mem_total: gpuMemTotal,\n    recommendation,\n    slack_message: report,\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "if-slack",
+      "name": "Slack Configured?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1520,
+        420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-webhook",
+              "leftValue": "={{ ($env.SLACK_WEBHOOK_URL || '').length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "slack-daily",
+      "name": "Slack — Daily Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1740,
+        340
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slack_message }) }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 09:00": {
+      "main": [
+        [
+          {
+            "node": "GET Champion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Champion": {
+      "main": [
+        [
+          {
+            "node": "GET Eval Scores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Eval Scores": {
+      "main": [
+        [
+          {
+            "node": "GET Lineage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Lineage": {
+      "main": [
+        [
+          {
+            "node": "GET GPU",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET GPU": {
+      "main": [
+        [
+          {
+            "node": "Build Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Daily Report": {
+      "main": [
+        [
+          {
+            "node": "Slack Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Configured?": {
+      "main": [
+        [
+          {
+            "node": "Slack — Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "description": "Daily 09:00 cron summary. Pulls champion, eval scores, lineage tree, and GPU stats; classifies trend (improving / plateau / regressing); estimates storage; computes 24h promoted/discarded; emits a recommendation and posts a formatted Slack digest when SLACK_WEBHOOK_URL is set."
+}

@@ -3,17 +3,39 @@
   "active": false,
   "nodes": [
     {
-      "parameters": {},
       "id": "error-trigger",
       "name": "Error Trigger",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
       "position": [
-        240,
+        200,
         300
-      ]
+      ],
+      "parameters": {}
     },
     {
+      "id": "code-extract-error",
+      "name": "Extract Error Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const j = $input.first().json || {};\nconst execution = j.execution || {};\nconst err = execution.error || j.error || {};\nconst lastNode = execution.lastNodeExecuted || err.node || 'unknown';\nconst wfName = (j.workflow && j.workflow.name) || j.workflow_name || 'unknown';\nconst wfId = (j.workflow && j.workflow.id) || j.workflow_id || 'unknown';\nconst execId = execution.id || j.execution_id || 'unknown';\nconst execUrl = execution.url || (j.workflow_execution_url) || null;\nconst message = err.message || j.message || 'No error message';\nconst stack = err.stack || err.description || '';\n\nconst raw = String(message).toLowerCase();\nlet severity = 'error';\nif (/oom|out of memory|cuda out of memory/.test(raw)) severity = 'critical';\nelse if (/timeout|timed out|deadline/.test(raw)) severity = 'warning';\nelse if (/connection refused|econnref|name or service not known|connect timeout/.test(raw)) severity = 'warning';\n\nconst slack_message = [\n  `:rotating_light: *n8n workflow error* — \\`${wfName}\\``,\n  `\\u2022 Node: \\`${lastNode}\\``,\n  `\\u2022 Severity: \\`${severity}\\``,\n  `\\u2022 Message: ${message}`,\n  execUrl ? `\\u2022 Execution: ${execUrl}` : `\\u2022 Execution ID: \\`${execId}\\``,\n].join('\\n');\n\nconsole.log('[error-handler]', { wfName, lastNode, severity, execId });\n\nreturn [{\n  json: {\n    workflow_name: wfName,\n    workflow_id: wfId,\n    execution_id: execId,\n    execution_url: execUrl,\n    failed_node: lastNode,\n    error_message: message,\n    stack_trace: stack,\n    severity,\n    slack_message,\n    detected_at: new Date().toISOString(),\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "post-api-alert",
+      "name": "POST Alert to API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        300
+      ],
       "parameters": {
         "method": "POST",
         "url": "http://api:8000/api/system/alerts",
@@ -32,23 +54,88 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ alert_type: 'workflow_error', severity: 'critical', failed_services: 'n8n', api_status: String($json.execution?.error?.message || $json.error?.message || 'unknown'), detected_at: $now.toISO() }) }}",
+        "jsonBody": "={{ JSON.stringify({ alert_type: 'workflow_error', severity: $json.severity, failed_services: 'n8n', api_status: $json.error_message, workflow_name: $json.workflow_name, failed_node: $json.failed_node, execution_id: $json.execution_id, execution_url: $json.execution_url, detected_at: $json.detected_at }) }}",
         "options": {
-          "timeout": 10000
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
-      },
-      "id": "post-api-alert",
-      "name": "POST Alert to API",
+      }
+    },
+    {
+      "id": "if-slack",
+      "name": "Slack Configured?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        860,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-webhook",
+              "leftValue": "={{ ($env.SLACK_WEBHOOK_URL || '').length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "slack-error",
+      "name": "Slack — Workflow Error",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        480,
-        300
-      ]
+        1080,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slack_message }) }}",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
     }
   ],
   "connections": {
     "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract Error Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Error Context": {
       "main": [
         [
           {
@@ -58,11 +145,36 @@
           }
         ]
       ]
+    },
+    "POST Alert to API": {
+      "main": [
+        [
+          {
+            "node": "Slack Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Configured?": {
+      "main": [
+        [
+          {
+            "node": "Slack — Workflow Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
     }
   },
   "settings": {
     "executionOrder": "v1",
-    "saveManualExecutions": false
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
   },
-  "description": "Assign as n8n global error workflow (Settings). Posts workflow_error alerts to /api/system/alerts with MODELFORGE_API_KEY."
+  "staticData": null,
+  "description": "Assign as n8n global error workflow (Settings). Extracts workflow/node/execution context and severity (OOM=critical, timeouts/conn=warning), posts a richer workflow_error alert to /api/system/alerts, and notifies Slack when SLACK_WEBHOOK_URL is set."
 }

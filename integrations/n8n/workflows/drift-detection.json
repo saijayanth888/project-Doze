@@ -1,0 +1,430 @@
+{
+  "name": "Drift Detection",
+  "active": false,
+  "nodes": [
+    {
+      "id": "schedule-2h",
+      "name": "Every 2 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        420
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 2
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "get-evolve-status",
+      "name": "GET Evolve Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        420,
+        420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/evolve/status",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "if-running",
+      "name": "Evolution Running?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        640,
+        420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "running",
+              "leftValue": "={{ $json.is_running }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "noop-busy",
+      "name": "Skip — Training in Progress",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        860,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "get-lineage",
+      "name": "GET Lineage Tree",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        540
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/lineage/tree",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-find-gens",
+      "name": "Find Last 2 Promoted Gens",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        540
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const lineage = $input.first().json || {};\nconst nodes = Array.isArray(lineage.nodes) ? lineage.nodes : [];\n\nconst promotedGens = Array.from(new Set(\n  nodes\n    .filter((n) => n && (n.promoted || String(n.decision || '').toLowerCase() === 'promote'))\n    .map((n) => Number(n.generation))\n    .filter((g) => Number.isFinite(g))\n)).sort((a, b) => b - a);\n\nif (promotedGens.length < 2) {\n  console.log('[drift] insufficient promoted generations:', promotedGens);\n  return [{ json: { sufficient: false, gen_a: null, gen_b: null, message: 'Need at least 2 promoted generations.' } }];\n}\n\nconst gen_b = promotedGens[0];\nconst gen_a = promotedGens[1];\nconsole.log('[drift] comparing', gen_a, '->', gen_b);\nreturn [{ json: { sufficient: true, gen_a, gen_b } }];\n"
+      }
+    },
+    {
+      "id": "if-sufficient",
+      "name": "Sufficient History?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        540
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "sufficient",
+              "leftValue": "={{ $json.sufficient }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "noop-insufficient",
+      "name": "Skip — Insufficient History",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        680
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "get-drift",
+      "name": "GET Drift",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1520,
+        420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=http://api:8000/api/eval/drift/{{ $json.gen_a }}/{{ $json.gen_b }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-interpret",
+      "name": "Interpret Drift",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        420
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const j = $input.first().json || {};\nconst gens = $('Find Last 2 Promoted Gens').first().json || {};\nconst gen_a = j.generation_a ?? gens.gen_a;\nconst gen_b = j.generation_b ?? gens.gen_b;\nconst score = Number(j.drift_score);\n\nlet level = 'unknown';\nif (Number.isFinite(score)) {\n  if (score < 0.1) level = 'minimal';\n  else if (score < 0.3) level = 'moderate';\n  else level = 'significant';\n}\n\nconst significant = level === 'significant';\nconst slack_message = significant\n  ? `:warning: *Significant drift detected* between Gen ${gen_a} and Gen ${gen_b} (score: ${score.toFixed(4)}). Model behavior is diverging. Consider rolling back to Gen ${gen_a} or expanding eval coverage.`\n  : `:information_source: Drift between Gen ${gen_a} and Gen ${gen_b}: ${level} (score: ${Number.isFinite(score) ? score.toFixed(4) : 'n/a'}).`;\n\nconsole.log('[drift]', { gen_a, gen_b, score, level });\n\nreturn [{ json: { gen_a, gen_b, drift_score: score, level, significant, slack_message } }];\n"
+      }
+    },
+    {
+      "id": "if-significant",
+      "name": "Significant?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1960,
+        420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "is-sig",
+              "leftValue": "={{ $json.significant }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "slack-drift",
+      "name": "Slack — Drift Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2180,
+        340
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slack_message }) }}",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "noop-not-sig",
+      "name": "Log — Drift Not Significant",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2180,
+        500
+      ],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Every 2 Hours": {
+      "main": [
+        [
+          {
+            "node": "GET Evolve Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Evolve Status": {
+      "main": [
+        [
+          {
+            "node": "Evolution Running?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evolution Running?": {
+      "main": [
+        [
+          {
+            "node": "Skip — Training in Progress",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "GET Lineage Tree",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Lineage Tree": {
+      "main": [
+        [
+          {
+            "node": "Find Last 2 Promoted Gens",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Last 2 Promoted Gens": {
+      "main": [
+        [
+          {
+            "node": "Sufficient History?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sufficient History?": {
+      "main": [
+        [
+          {
+            "node": "GET Drift",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip — Insufficient History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Drift": {
+      "main": [
+        [
+          {
+            "node": "Interpret Drift",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpret Drift": {
+      "main": [
+        [
+          {
+            "node": "Significant?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Significant?": {
+      "main": [
+        [
+          {
+            "node": "Slack — Drift Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log — Drift Not Significant",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "description": "Every 2 hours: skips when training is in progress; pulls /api/lineage/tree, finds last two promoted generations, calls /api/eval/drift/{a}/{b}, classifies the score (minimal/moderate/significant) and Slack-alerts on significant drift only."
+}

@@ -1,0 +1,266 @@
+{
+  "name": "Weekly Summary",
+  "active": false,
+  "nodes": [
+    {
+      "id": "cron-mon-8",
+      "name": "Monday 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        420
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "get-lineage",
+      "name": "GET Lineage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        420,
+        420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/lineage/tree",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "get-scores",
+      "name": "GET Eval Scores",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/eval/scores",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "get-champion",
+      "name": "GET Champion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/models/champion",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-weekly",
+      "name": "Build Weekly Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        420
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const lineage = $('GET Lineage').first().json || {};\nconst scoresResp = $('GET Eval Scores').first().json || {};\nconst champion = $input.first().json || {};\n\nconst nodes = Array.isArray(lineage.nodes) ? lineage.nodes : [];\nconst trends = Array.isArray(scoresResp)\n  ? scoresResp\n  : Array.isArray(scoresResp.trends)\n  ? scoresResp.trends\n  : Array.isArray(scoresResp.scores)\n  ? scoresResp.scores\n  : [];\n\nconst now = new Date();\nconst since = new Date(now.getTime() - 7 * 24 * 3600 * 1000);\nconst sincePrev = new Date(now.getTime() - 14 * 24 * 3600 * 1000);\n\nfunction inWindow(ts, a, b) {\n  if (!ts) return false;\n  const d = new Date(ts);\n  return d >= a && d < b;\n}\n\nlet promotedThis = 0;\nlet discardedThis = 0;\nlet promotedPrev = 0;\nlet discardedPrev = 0;\nlet trainingSecondsThis = 0;\nconst weakAccum = {};\nconst genDeltas = [];\n\nlet bestImp = -Infinity;\nlet bestImpDetail = null;\nlet prevAvg = null;\nfor (const n of nodes) {\n  const ts = n.created_at || n.completed_at || n.timestamp;\n  const decision = String(n.decision || (n.promoted ? 'promote' : 'discard')).toLowerCase();\n  const inThis = inWindow(ts, since, now);\n  const inPrev = inWindow(ts, sincePrev, since);\n  if (inThis) {\n    if (decision === 'promote') promotedThis += 1;\n    else if (decision === 'discard') discardedThis += 1;\n    trainingSecondsThis += Number(n.duration_seconds || 0);\n    const wc = n.weak_categories || (n.data && n.data.weak_categories) || [];\n    if (Array.isArray(wc)) for (const w of wc) weakAccum[w] = (weakAccum[w] || 0) + 1;\n  }\n  if (inPrev) {\n    if (decision === 'promote') promotedPrev += 1;\n    else if (decision === 'discard') discardedPrev += 1;\n  }\n  const avg = Number(n.avg_score ?? n.champion_avg ?? n.score);\n  if (Number.isFinite(avg)) {\n    if (prevAvg !== null) {\n      const d = avg - prevAvg;\n      genDeltas.push({ gen: Number(n.generation), delta: d });\n      if (d > bestImp) {\n        bestImp = d;\n        bestImpDetail = { gen: Number(n.generation), delta: d };\n      }\n    }\n    prevAvg = avg;\n  }\n}\n\nconst totalThis = promotedThis + discardedThis;\nconst totalPrev = promotedPrev + discardedPrev;\nconst rateThis = totalThis ? promotedThis / totalThis : 0;\nconst ratePrev = totalPrev ? promotedPrev / totalPrev : 0;\n\n// Per-benchmark week-over-week\nfunction collectByBench(predicate) {\n  const out = {};\n  for (const t of trends) {\n    const ts = t.created_at || t.scored_at || t.completed_at || t.timestamp;\n    if (!predicate(ts)) continue;\n    const k = t.benchmark;\n    const v = Number(t.score ?? t.child_score ?? 0);\n    if (!Number.isFinite(v)) continue;\n    if (!out[k]) out[k] = [];\n    out[k].push(v);\n  }\n  return out;\n}\nfunction avgEach(obj) {\n  const out = {};\n  for (const [k, arr] of Object.entries(obj)) out[k] = arr.reduce((a, b) => a + b, 0) / arr.length;\n  return out;\n}\nconst thisWeekBench = avgEach(collectByBench((ts) => inWindow(ts, since, now)));\nconst prevWeekBench = avgEach(collectByBench((ts) => inWindow(ts, sincePrev, since)));\nconst weekOverWeek = {};\nfor (const k of Object.keys(thisWeekBench)) {\n  const cur = thisWeekBench[k];\n  const prev = prevWeekBench[k];\n  weekOverWeek[k] = (Number.isFinite(prev) ? cur - prev : null);\n}\n\nconst topWeak = Object.entries(weakAccum)\n  .sort((a, b) => b[1] - a[1])\n  .slice(0, 5)\n  .map(([k, v]) => `${k}(${v})`)\n  .join(', ');\n\nconst championLabel = champion.model_id || champion.champion_model_id || 'unknown';\nconst championGen = champion.generation ?? champion.gen ?? 'n/a';\nconst lineageDepth = nodes.filter((n) => n.promoted || String(n.decision || '').toLowerCase() === 'promote').length;\n\nconst dateLabel = now.toISOString().slice(0, 10);\n\nconst lines = [\n  `# ModelForge Weekly Summary — ${dateLabel}`,\n  '',\n  `**Champion**: \\`${championLabel}\\` (gen ${championGen})`,\n  `**Lineage depth**: ${lineageDepth} promoted champions total`,\n  '',\n  `## Activity`,\n  `- Generations this week: **${totalThis}** (promoted ${promotedThis}, discarded ${discardedThis})`,\n  `- Generations last week: ${totalPrev} (promoted ${promotedPrev}, discarded ${discardedPrev})`,\n  `- Promotion rate: ${(rateThis * 100).toFixed(1)}% (vs ${(ratePrev * 100).toFixed(1)}% last week)`,\n  `- Best single-gen improvement: ${bestImpDetail ? (bestImpDetail.delta * 100).toFixed(2) + '% (gen ' + bestImpDetail.gen + ')' : 'n/a'}`,\n  `- Total training: ${(trainingSecondsThis / 3600).toFixed(1)}h`,\n  `- Avg duration / gen: ${totalThis ? Math.round(trainingSecondsThis / totalThis) + 's' : 'n/a'}`,\n  '',\n  `## Score trajectory (week-over-week)`,\n  ...Object.entries(weekOverWeek).map(([k, d]) => `- **${k}**: ${thisWeekBench[k]?.toFixed(4) ?? 'n/a'}${d === null ? '' : ' (\\u0394 ' + (d * 100).toFixed(2) + '%)'}`),\n  '',\n  `## Weakness focus`,\n  `- Most-targeted weak categories: ${topWeak || 'n/a'}`,\n].join('\\n');\n\nconsole.log('[weekly-summary]', { dateLabel, totalThis, promotedThis, discardedThis, rateThis });\n\nreturn [{\n  json: {\n    date: dateLabel,\n    champion_label: championLabel,\n    champion_generation: championGen,\n    lineage_depth: lineageDepth,\n    promoted_this_week: promotedThis,\n    discarded_this_week: discardedThis,\n    total_this_week: totalThis,\n    promoted_prev_week: promotedPrev,\n    total_prev_week: totalPrev,\n    promotion_rate_this_week: rateThis,\n    promotion_rate_prev_week: ratePrev,\n    training_hours_this_week: trainingSecondsThis / 3600,\n    best_improvement: bestImpDetail,\n    week_over_week: weekOverWeek,\n    top_weak: topWeak,\n    markdown: lines,\n    slack_message: lines,\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "if-slack",
+      "name": "Slack Configured?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-webhook",
+              "leftValue": "={{ ($env.SLACK_WEBHOOK_URL || '').length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "slack-weekly",
+      "name": "Slack — Weekly Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1520,
+        340
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slack_message }) }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Monday 08:00": {
+      "main": [
+        [
+          {
+            "node": "GET Lineage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Lineage": {
+      "main": [
+        [
+          {
+            "node": "GET Eval Scores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Eval Scores": {
+      "main": [
+        [
+          {
+            "node": "GET Champion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Champion": {
+      "main": [
+        [
+          {
+            "node": "Build Weekly Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Weekly Summary": {
+      "main": [
+        [
+          {
+            "node": "Slack Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Configured?": {
+      "main": [
+        [
+          {
+            "node": "Slack — Weekly Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "description": "Monday 08:00 cron weekly digest. Pulls lineage / scores / champion, computes activity (promoted, discarded, promotion rate), best single-gen improvement, training hours, week-over-week per-benchmark deltas, and most-targeted weak categories. Posts a Markdown summary to Slack (Slack-only, no GitHub issue creation)."
+}
