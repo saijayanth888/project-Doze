@@ -12,6 +12,16 @@ class EvolutionRequest(BaseModel):
     lora_alpha: int = Field(default=32, ge=8, le=128)
     learning_rate: float = Field(default=2e-4, ge=1e-5, le=1e-2)
     batch_size: int = Field(default=2, ge=1, le=16)
+    custom_dataset_id: str | None = Field(
+        default=None,
+        description="Uploaded custom dataset id under data/custom/",
+    )
+    max_samples: int | None = Field(
+        default=None,
+        ge=100,
+        le=100000,
+        description="Override curation sample budget (maps to curator max_samples)",
+    )
 
 
 class EvolutionStatus(BaseModel):

@@ -45,7 +45,8 @@ async def test_graph_runs_to_max_generations():
             "error": None,
             "champion_path": None,
             "champion_avg": 0.0,
-        }
+        },
+        {"recursion_limit": 100},
     )
 
     assert final["generation"] == 4
@@ -93,7 +94,8 @@ async def test_graph_respects_cancellation():
             "champion_avg": 0.0,
             "parent_scores": {},
             "child_scores": {},
-        }
+        },
+        {"recursion_limit": 100},
     )
     # Cancel flag is honoured by the conditional edge → graph exits early.
     assert final["cancelled"] is True

@@ -1,9 +1,11 @@
 """Benchmark scores, trends, and per-generation evaluation routes."""
 
+import json
 import logging
 from collections import defaultdict
+from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from api.deps import get_db
 from api.schemas.evaluation import (
@@ -157,3 +159,55 @@ async def get_generation_results(
 @router.get("/drift/{gen_a}/{gen_b}")
 async def get_drift(gen_a: int, gen_b: int, db: LineageDB = Depends(get_db)):
     return await db.detect_drift(gen_a, gen_b)
+
+
+@router.get("/compare-runs")
+async def compare_runs(
+    run_ids: str = Query(..., description="Comma-separated run IDs"),
+    db: LineageDB = Depends(get_db),
+) -> dict[str, Any]:
+    """Compare champion scores across multiple evolution runs."""
+    ids = [r.strip() for r in run_ids.split(",") if r.strip()]
+    results: dict[str, Any] = {}
+    for run_id in ids:
+        try:
+            gens = await db.get_all_generations(run_id)
+        except Exception as exc:
+            logger.warning("compare_runs %s: %s", run_id, exc)
+            gens = []
+        if not gens:
+            results[run_id] = {
+                "generations": 0,
+                "promoted": 0,
+                "final_scores": {},
+                "improvement": {},
+            }
+            continue
+        first = gens[0]
+        last = gens[-1]
+        first_scores = first.get("child_scores") or {}
+        last_scores = last.get("child_scores") or {}
+        if isinstance(first_scores, str):
+            try:
+                first_scores = json.loads(first_scores)
+            except Exception:
+                first_scores = {}
+        if isinstance(last_scores, str):
+            try:
+                last_scores = json.loads(last_scores)
+            except Exception:
+                last_scores = {}
+        improvement: dict[str, float] = {}
+        keys = set(first_scores.keys()) | set(last_scores.keys())
+        for k in keys:
+            try:
+                improvement[str(k)] = float(last_scores.get(k, 0)) - float(first_scores.get(k, 0))
+            except (TypeError, ValueError):
+                improvement[str(k)] = 0.0
+        results[run_id] = {
+            "generations": len(gens),
+            "promoted": sum(1 for g in gens if g.get("promoted")),
+            "final_scores": last_scores if isinstance(last_scores, dict) else {},
+            "improvement": improvement,
+        }
+    return results

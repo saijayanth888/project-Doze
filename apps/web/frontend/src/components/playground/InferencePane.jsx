@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { RotateCcw, Zap, Trophy } from 'lucide-react';
-import { apiFetch } from '../../config/api';
+import { RotateCcw, Zap, Trophy, Save } from 'lucide-react';
+import { apiFetch, fetchAdapters, fetchDatasets, savePairToDataset, serveAdapter } from '../../config/api';
+import { C, F } from '../../config/colors';
 import DNALoader from '../shared/DNALoader';
 import MagneticButton from '../shared/MagneticButton';
 
@@ -23,7 +24,7 @@ function TypewriterText({ text, speed = 20 }) {
       if (i >= text.length) clearInterval(iv);
     }, speed);
     return () => clearInterval(iv);
-  }, [text]);
+  }, [text, speed]);
 
   return (
     <span>
@@ -36,45 +37,134 @@ function TypewriterText({ text, speed = 20 }) {
 }
 
 const MOCK_RESPONSES = {
-  base: 'This is a response from the base model. It provides a foundational answer based on pre-training data without any evolutionary improvements applied. The answer may lack precision on specialized topics.',
-  champion: 'This is the champion model response — Generation 23, the highest-performing checkpoint. Evolutionary Score Distillation™ has refined this model across 23 generations of adversarial probing and score-weighted mutation, yielding measurably superior accuracy on reasoning benchmarks.',
+  base: 'This is a response from the base model.',
+  champion: 'This is the champion / selected adapter response.',
 };
 
 export default function InferencePane() {
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [responses, setResponses] = useState({ base: '', champion: '' });
+  const [meta, setMeta] = useState({ base: null, champion: null });
   const [submitted, setSubmitted] = useState(false);
+  const [adapters, setAdapters] = useState([]);
+  const [datasets, setDatasets] = useState([]);
+  const [adapterId, setAdapterId] = useState('');
+  const [saveDs, setSaveDs] = useState('');
+  const [badge, setBadge] = useState('');
   const textareaRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const a = await fetchAdapters().catch(() => null);
+        if (cancelled || !a) return;
+        const list = a.adapters || [];
+        setAdapters(list);
+        const cid = a.champion_id || list.find((x) => x.is_champion)?.adapter_id;
+        if (cid) {
+          setAdapterId(cid);
+          setBadge(cid);
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const d = await fetchDatasets().catch(() => null);
+        if (cancelled || !d) return;
+        const customs = (d.datasets || []).filter((x) => x.kind === 'custom');
+        setDatasets(customs);
+        setSaveDs((prev) => prev || (customs[0]?.dataset_id ?? ''));
+      } catch {
+        setDatasets([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleSubmit() {
     if (!prompt.trim() || loading) return;
     setLoading(true);
     setSubmitted(false);
     setResponses({ base: '', champion: '' });
+    setMeta({ base: null, champion: null });
     try {
-      const result = await apiFetch('/api/infer', {
+      let modelBTag = 'llama3.2:3b';
+      let targetId = adapterId;
+      if (!targetId) {
+        targetId = adapters.find((x) => x.is_champion)?.adapter_id;
+      }
+      if (!targetId) {
+        const fresh = await fetchAdapters().catch(() => null);
+        targetId = fresh?.champion_id;
+      }
+
+      if (targetId) {
+        const served = await serveAdapter(targetId);
+        const sel = adapters.find((x) => x.adapter_id === targetId);
+        modelBTag = served?.ollama_model || sel?.base_model || 'llama3.2:3b';
+        setBadge(targetId);
+      }
+
+      const baseModel = 'llama3.2:3b';
+
+      const result = await apiFetch('/api/infer/compare', {
         method: 'POST',
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({
+          prompt,
+          model_a: baseModel,
+          model_b: modelBTag || baseModel,
+          max_tokens: 256,
+          temperature: 0.7,
+        }),
       });
 
-      if (result) {
-        setResponses({ base: result.base || MOCK_RESPONSES.base, champion: result.champion || MOCK_RESPONSES.champion });
+      if (result?.base && result?.champion) {
+        setResponses({
+          base: result.base.response || MOCK_RESPONSES.base,
+          champion: result.champion.response || MOCK_RESPONSES.champion,
+        });
+        setMeta({
+          base: result.base,
+          champion: result.champion,
+        });
       } else {
         setResponses({
-          base: `[Mock] ${MOCK_RESPONSES.base} Prompt: "${prompt.slice(0, 50)}..."`,
-          champion: `[Mock] ${MOCK_RESPONSES.champion} Prompt: "${prompt.slice(0, 50)}..."`,
+          base: MOCK_RESPONSES.base,
+          champion: MOCK_RESPONSES.champion,
         });
       }
       setSubmitted(true);
     } catch {
       setResponses({
-        base: 'Request failed. Check API key and that the API is running.',
-        champion: 'Request failed. Check API key and that the API is running.',
+        base: 'Request failed. Check API key and that Ollama is running.',
+        champion: 'Request failed. Check API key and that Ollama is running.',
       });
       setSubmitted(true);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleSavePair(which) {
+    if (!saveDs || !prompt.trim()) return;
+    const text = which === 'base' ? responses.base : responses.champion;
+    try {
+      await savePairToDataset(saveDs, prompt, text);
+    } catch {
+      /* ignore */
     }
   }
 
@@ -84,20 +174,70 @@ export default function InferencePane() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 16 }}>
-      {/* Prompt */}
-      <div style={{
-        background: '#111827',
-        border: '1px solid #1e293b',
-        borderRadius: 12,
-        padding: 16,
-      }}>
-        <div style={{ fontSize: 11, color: '#64748b', fontFamily: 'JetBrains Mono', letterSpacing: 2, marginBottom: 10 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 8,
+          padding: '8px 12px',
+          background: C.bgC,
+          border: `1px solid ${C.border}`,
+          borderRadius: 8,
+        }}
+      >
+        <div style={{ fontFamily: F.mono, fontSize: 11, color: C.txtM }}>
+          Model info: <span style={{ color: C.acc }}>{badge || '—'}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <label style={{ fontSize: 11, color: C.txtM, fontFamily: F.ui }}>Adapter</label>
+          <select
+            value={adapterId}
+            onChange={(e) => setAdapterId(e.target.value)}
+            style={{
+              background: C.bgI,
+              border: `1px solid ${C.border}`,
+              borderRadius: 6,
+              color: C.txtP,
+              fontSize: 12,
+              fontFamily: F.mono,
+              padding: '6px 10px',
+            }}
+          >
+            <option value="">Champion (default)</option>
+            {adapters.map((a) => (
+              <option key={a.adapter_id} value={a.adapter_id}>
+                {a.adapter_id} ({a.status})
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div
+        style={{
+          background: '#111827',
+          border: '1px solid #1e293b',
+          borderRadius: 12,
+          padding: 16,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 11,
+            color: '#64748b',
+            fontFamily: 'JetBrains Mono',
+            letterSpacing: 2,
+            marginBottom: 10,
+          }}
+        >
           PROMPT
         </div>
         <textarea
           ref={textareaRef}
           value={prompt}
-          onChange={e => setPrompt(e.target.value)}
+          onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Enter a prompt... (⌘+Enter to run)"
           rows={4}
@@ -114,8 +254,8 @@ export default function InferencePane() {
             outline: 'none',
             transition: 'border-color 200ms',
           }}
-          onFocus={e => e.target.style.borderColor = '#818cf8'}
-          onBlur={e => e.target.style.borderColor = '#1e293b'}
+          onFocus={(e) => (e.target.style.borderColor = '#818cf8')}
+          onBlur={(e) => (e.target.style.borderColor = '#1e293b')}
         />
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 6, flex: 1, flexWrap: 'wrap' }}>
@@ -138,8 +278,14 @@ export default function InferencePane() {
                   cursor: 'pointer',
                   transition: 'all 200ms',
                 }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = '#334155'; e.currentTarget.style.color = '#94a3b8'; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = '#1e293b'; e.currentTarget.style.color = '#64748b'; }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = '#334155';
+                  e.currentTarget.style.color = '#94a3b8';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = '#1e293b';
+                  e.currentTarget.style.color = '#64748b';
+                }}
               >
                 {p.slice(0, 30)}…
               </button>
@@ -147,7 +293,12 @@ export default function InferencePane() {
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
-              onClick={() => { setPrompt(''); setSubmitted(false); setResponses({ base: '', champion: '' }); }}
+              type="button"
+              onClick={() => {
+                setPrompt('');
+                setSubmitted(false);
+                setResponses({ base: '', champion: '' });
+              }}
               style={{
                 padding: '8px 12px',
                 background: 'transparent',
@@ -182,52 +333,125 @@ export default function InferencePane() {
               }}
             >
               {loading ? (
-                <><DNALoader size={14} /> Running…</>
+                <>
+                  <DNALoader size={14} /> Running…
+                </>
               ) : (
-                <><Zap size={13} /> Run Inference</>
+                <>
+                  <Zap size={13} /> Run Inference
+                </>
               )}
             </MagneticButton>
           </div>
         </div>
       </div>
 
-      {/* Side-by-side responses */}
       {(submitted || loading) && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, flex: 1 }}>
           {[
-            { key: 'base', label: 'BASE MODEL', color: '#818cf8', subtitle: 'Pre-evolution checkpoint' },
-            { key: 'champion', label: 'CHAMPION MODEL', color: '#76b900', subtitle: 'Gen 23 — best evolved', crown: true },
+            { key: 'base', label: 'BASE MODEL', color: '#818cf8', subtitle: 'model_a', crown: false },
+            { key: 'champion', label: 'ADAPTER / CHAMPION', color: '#76b900', subtitle: 'model_b', crown: true },
           ].map(({ key, label, color, subtitle, crown }) => (
-            <div key={key} style={{
-              background: '#111827',
-              border: `1px solid ${loading ? '#1e293b' : color + '33'}`,
-              borderRadius: 12,
-              padding: 16,
-              transition: 'border-color 400ms',
-            }}>
+            <div
+              key={key}
+              style={{
+                background: '#111827',
+                border: `1px solid ${loading ? '#1e293b' : color + '33'}`,
+                borderRadius: 12,
+                padding: 16,
+                transition: 'border-color 400ms',
+              }}
+            >
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
                 <div>
-                  <div style={{ fontSize: 10, fontFamily: 'JetBrains Mono', color, letterSpacing: 1 }}>{label}</div>
-                  <div style={{ fontSize: 12, color: '#64748b', fontFamily: 'Outfit', marginTop: 2 }}>{subtitle}</div>
+                  <div
+                    style={{ fontSize: 10, fontFamily: 'JetBrains Mono', color, letterSpacing: 1 }}
+                  >
+                    {label}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#64748b', fontFamily: 'Outfit', marginTop: 2 }}>
+                    {subtitle}
+                  </div>
                 </div>
-                {crown && <Trophy size={18} color={color} style={{ animation: 'crown-float 3s ease-in-out infinite' }} aria-hidden />}
+                {crown && (
+                  <Trophy size={18} color={color} style={{ animation: 'crown-float 3s ease-in-out infinite' }} aria-hidden />
+                )}
               </div>
-              <div style={{
-                minHeight: 120,
-                fontSize: 13,
-                lineHeight: 1.7,
-                color: '#94a3b8',
-                fontFamily: 'Outfit',
-              }}>
+              <div
+                style={{
+                  minHeight: 120,
+                  fontSize: 13,
+                  lineHeight: 1.7,
+                  color: '#94a3b8',
+                  fontFamily: 'Outfit',
+                }}
+              >
                 {loading ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '20px 0' }}>
                     <DNALoader size={24} />
-                    <span style={{ color: '#475569', fontSize: 12, fontFamily: 'JetBrains Mono' }}>Generating…</span>
+                    <span style={{ color: '#475569', fontSize: 12, fontFamily: 'JetBrains Mono' }}>
+                      Generating…
+                    </span>
                   </div>
                 ) : responses[key] ? (
                   <TypewriterText text={responses[key]} speed={key === 'champion' ? 18 : 22} />
                 ) : null}
               </div>
+              {!loading && meta[key]?.latency_ms != null && (
+                <div
+                  style={{
+                    marginTop: 12,
+                    fontSize: 11,
+                    fontFamily: 'JetBrains Mono',
+                    color: '#475569',
+                  }}
+                >
+                  {meta[key]?.latency_ms != null && (
+                    <span style={{ marginRight: 12 }}>{Math.round(meta[key].latency_ms)} ms</span>
+                  )}
+                  {meta[key]?.tokens != null && <span>{meta[key].tokens} tokens</span>}
+                </div>
+              )}
+              {!loading && responses[key] && datasets.length > 0 && (
+                <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <select
+                    value={saveDs}
+                    onChange={(e) => setSaveDs(e.target.value)}
+                    style={{
+                      fontSize: 11,
+                      background: C.bgI,
+                      border: `1px solid ${C.border}`,
+                      borderRadius: 4,
+                      color: C.txtS,
+                      padding: '4px 8px',
+                    }}
+                  >
+                    {datasets.map((d) => (
+                      <option key={d.dataset_id} value={d.dataset_id}>
+                        {d.dataset_id.slice(0, 8)}…
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => handleSavePair(key)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      fontSize: 11,
+                      padding: '4px 10px',
+                      background: C.accDim,
+                      border: `1px solid ${C.border}`,
+                      borderRadius: 6,
+                      color: C.acc,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <Save size={12} /> Save pair
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>

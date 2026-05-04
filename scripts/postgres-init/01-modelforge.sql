@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS generations (
     training_data_size  INT NOT NULL DEFAULT 0,
     duration_seconds    DOUBLE PRECISION NOT NULL DEFAULT 0,
     data                JSONB NOT NULL DEFAULT '{}'::jsonb,
+    archived            BOOLEAN NOT NULL DEFAULT FALSE,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (run_id, generation)
 );
@@ -76,6 +77,7 @@ CREATE TABLE IF NOT EXISTS training_samples (
     response        TEXT NOT NULL,
     embedding       vector(384),
     quality_score   FLOAT,
+    content_hash    TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -83,3 +85,11 @@ CREATE INDEX IF NOT EXISTS idx_train_hnsw ON training_samples
     USING hnsw (embedding vector_cosine_ops) WITH (m=16, ef_construction=64);
 CREATE INDEX IF NOT EXISTS idx_train_gen ON training_samples(generation);
 CREATE INDEX IF NOT EXISTS idx_train_cat ON training_samples(category);
+CREATE INDEX IF NOT EXISTS idx_train_hash ON training_samples(content_hash) WHERE content_hash IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS evolution_presets (
+    name        TEXT PRIMARY KEY,
+    is_builtin  BOOLEAN NOT NULL DEFAULT FALSE,
+    config      JSONB NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

@@ -63,15 +63,15 @@ logs-api:
 
 # ── Tests + lint ──────────────────────────────────────────
 test:
-	cd $(API_DIR) && ../$(VENV)/bin/pytest
+	cd $(API_DIR) && ../../$(VENV)/bin/pytest tests
 
 lint:
-	cd $(API_DIR) && ../$(VENV)/bin/ruff check src tests
-	cd $(API_DIR) && ../$(VENV)/bin/mypy src
+	cd $(API_DIR) && ../../$(VENV)/bin/ruff check src tests
+	cd $(API_DIR) && ../../$(VENV)/bin/mypy src
 
 format:
-	cd $(API_DIR) && ../$(VENV)/bin/ruff format src tests
-	cd $(API_DIR) && ../$(VENV)/bin/ruff check --fix src tests
+	cd $(API_DIR) && ../../$(VENV)/bin/ruff format src tests
+	cd $(API_DIR) && ../../$(VENV)/bin/ruff check --fix src tests
 
 test-e2e:
 	cd $(WEB_DIR) && npx playwright install --with-deps

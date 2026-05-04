@@ -107,3 +107,135 @@ export function wsConnect(path) {
   const suffix = key ? `${sep}api_key=${encodeURIComponent(key)}` : '';
   return new WebSocket(`${wsBase}${path}${suffix}`);
 }
+
+async function rawFetchMultipart(path, formData, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const key = getApiKey();
+  const headers = {};
+  if (key) headers['X-API-Key'] = key;
+  try {
+    const res = await fetch(`${getApiBase()}${path}`, {
+      method: 'POST',
+      body: formData,
+      signal: controller.signal,
+      headers,
+    });
+    if (!res.ok) {
+      const error = new Error(`HTTP ${res.status}`);
+      error.status = res.status;
+      try {
+        error.body = await res.json();
+      } catch {
+        error.body = null;
+      }
+      throw error;
+    }
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function fetchAdapters() {
+  return apiFetch('/api/adapters');
+}
+
+export async function getAdapter(adapterId) {
+  return apiFetch(`/api/adapters/${encodeURIComponent(adapterId)}`);
+}
+
+export async function deleteAdapter(adapterId) {
+  return apiFetch(`/api/adapters/${encodeURIComponent(adapterId)}`, { method: 'DELETE' });
+}
+
+export async function rollbackAdapter(adapterId) {
+  return apiFetch(`/api/adapters/${encodeURIComponent(adapterId)}/rollback`, { method: 'POST' });
+}
+
+export async function serveAdapter(adapterId) {
+  return apiFetch(`/api/adapters/${encodeURIComponent(adapterId)}/serve`, { method: 'POST' });
+}
+
+export async function compareAdapters(adapterA, adapterB, prompt) {
+  const q = prompt ? `?prompt=${encodeURIComponent(prompt)}` : '';
+  return apiFetch(
+    `/api/adapters/compare/${encodeURIComponent(adapterA)}/${encodeURIComponent(adapterB)}${q}`,
+  );
+}
+
+export async function cleanupAdapters(params = {}) {
+  const sp = new URLSearchParams();
+  if (params.older_than_days != null) sp.set('older_than_days', String(params.older_than_days));
+  if (params.keep_promoted != null) sp.set('keep_promoted', String(params.keep_promoted));
+  const q = sp.toString();
+  return apiFetch(`/api/adapters/cleanup${q ? `?${q}` : ''}`, { method: 'POST' });
+}
+
+export async function fetchDatasets() {
+  return apiFetch('/api/datasets');
+}
+
+export async function getDataset(datasetId) {
+  return apiFetch(`/api/datasets/${encodeURIComponent(datasetId)}`);
+}
+
+export async function uploadDataset(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    return await rawFetchMultipart('/api/datasets/upload', fd);
+  } catch (e) {
+    if (e?.status === 401 || e?.status === 403) throw e;
+    await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+    return rawFetchMultipart('/api/datasets/upload', fd);
+  }
+}
+
+export async function deleteDataset(datasetId) {
+  return apiFetch(`/api/datasets/${encodeURIComponent(datasetId)}`, { method: 'DELETE' });
+}
+
+export async function getDatasetQuality(datasetId) {
+  return apiFetch(`/api/datasets/${encodeURIComponent(datasetId)}/quality`);
+}
+
+export async function savePairToDataset(datasetId, instruction, response) {
+  return apiFetch('/api/datasets/save-pair', {
+    method: 'POST',
+    body: JSON.stringify({ dataset_id: datasetId, instruction, response }),
+  });
+}
+
+export async function fetchPresets() {
+  return apiFetch('/api/configs/presets');
+}
+
+export async function getPreset(name) {
+  return apiFetch(`/api/configs/presets/${encodeURIComponent(name)}`);
+}
+
+export async function savePreset(name, config) {
+  return apiFetch('/api/configs/presets', {
+    method: 'POST',
+    body: JSON.stringify({ name, config }),
+  });
+}
+
+export async function deletePreset(name) {
+  return apiFetch(`/api/configs/presets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+export async function startEvolutionWithPreset(presetName) {
+  const preset = await getPreset(presetName);
+  const cfg = preset?.config || preset;
+  return apiFetch('/api/evolve/start', {
+    method: 'POST',
+    body: JSON.stringify(cfg),
+  });
+}
+
+export async function compareRuns(runIds) {
+  const q = Array.isArray(runIds) ? runIds.join(',') : runIds;
+  return apiFetch(`/api/eval/compare-runs?run_ids=${encodeURIComponent(q)}`);
+}

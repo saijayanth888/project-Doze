@@ -32,7 +32,11 @@ from services.data_curator import (
     MockDataCurator,
 )
 from services.lineage_db import LineageDB
-from services.n8n_webhook import build_evolution_payload, post_evolution_event
+from services.n8n_webhook import (
+    build_evolution_payload,
+    emit_evolution_complete,
+    post_evolution_event,
+)
 from utils.gpu import get_gpu_status
 
 logger = logging.getLogger("modelforge.agents.runner")
@@ -202,6 +206,15 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     champion_model_id=f"{base_model}@gen{int(final.get('generation', 0) or 0)}",
                     weak_categories=final.get("weak_categories", []),
                 )
+            )
+            await emit_evolution_complete(
+                run_id,
+                {
+                    "champion_avg": float(final.get("champion_avg", 0.0)),
+                    "final_scores": final.get("child_scores") or {},
+                    "generations_completed": int(final.get("generation", 0) or 0),
+                    "base_model": base_model,
+                },
             )
         logger.info(
             "[evolution %s] finished — last gen %s, champion avg %.4f",

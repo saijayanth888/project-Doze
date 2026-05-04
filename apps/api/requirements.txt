@@ -4,6 +4,7 @@
 # `gpu` extra and should only be installed on the DGX Spark host.
 
 fastapi==0.115.5
+python-multipart>=0.0.9
 uvicorn[standard]==0.32.1
 pydantic==2.10.3
 pydantic-settings==2.6.1

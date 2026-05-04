@@ -14,6 +14,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from config.settings import settings
+
 logger = logging.getLogger("modelforge.curator")
 
 
@@ -60,7 +62,7 @@ class MockDataCurator:
     ) -> CurationResult:
         await asyncio.sleep(0.3)
         n = min(max_samples, 1200 if weak_categories else 1000)
-        path = f"data/curated/gen-{generation}"
+        path = str(settings.resolve_data_root() / "curated" / f"gen-{generation}")
         return CurationResult(
             data_path=path,
             num_samples=n,
@@ -92,7 +94,7 @@ class HuggingFaceDataCurator:
             choices = example.get("choices") or example.get("options")
             answer = example.get("answer")
             if question and choices is not None and answer is not None:
-                if isinstance(choices, (list, tuple)):
+                if isinstance(choices, list | tuple):
                     choice_lines = "\n".join([f"{i}. {c}" for i, c in enumerate(choices)])
                 else:
                     choice_lines = str(choices)
@@ -108,7 +110,9 @@ class HuggingFaceDataCurator:
                 labels = choices.get("label") if isinstance(choices, dict) else None
                 texts = choices.get("text") if isinstance(choices, dict) else None
                 if labels and texts:
-                    choice_lines = "\n".join([f"{l}. {t}" for l, t in zip(labels, texts)])
+                    choice_lines = "\n".join(
+                        [f"{lab}. {t}" for lab, t in zip(labels, texts, strict=False)]
+                    )
                 else:
                     choice_lines = str(choices)
                 inst = f"{q}\n\nChoices:\n{choice_lines}\n\nAnswer with the correct choice label."
@@ -118,7 +122,7 @@ class HuggingFaceDataCurator:
             endings = example.get("endings") or example.get("choices")
             label = example.get("label") or example.get("answer")
             if ctx and endings is not None and label is not None:
-                if isinstance(endings, (list, tuple)):
+                if isinstance(endings, list | tuple):
                     choice_lines = "\n".join([f"{i}. {c}" for i, c in enumerate(endings)])
                 else:
                     choice_lines = str(endings)
@@ -195,7 +199,7 @@ class HuggingFaceDataCurator:
             if len(samples) >= max_samples:
                 break
 
-        out_dir = f"data/curated/gen-{generation}"
+        out_dir = str(settings.resolve_data_root() / "curated" / f"gen-{generation}")
         os.makedirs(out_dir, exist_ok=True)
 
         ds_out = Dataset.from_list(samples)

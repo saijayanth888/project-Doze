@@ -143,7 +143,7 @@ def build_graph(
                 analysis_lines.append(f"  {bench}: {score:.3f} — {', '.join(reasons)}")
 
         if not weak:
-            weakest = min(parent_scores, key=parent_scores.get)
+            weakest = min(parent_scores, key=lambda k: parent_scores[k])
             weak = [weakest]
             analysis_lines.append(
                 f"  {weakest}: {parent_scores[weakest]:.3f} — targeted as lowest"

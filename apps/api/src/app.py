@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.router import api_router
 from config.database import close_db, init_db
+from config.redis_pool import close_redis
 from config.settings import settings
 from middleware.auth import APIKeyMiddleware
 from middleware.errors import register_exception_handlers
@@ -49,6 +50,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    await close_redis()
     await close_db()
     logger.info("ModelForge API shutdown")
 

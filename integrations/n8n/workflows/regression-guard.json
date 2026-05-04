@@ -1,0 +1,438 @@
+{
+  "name": "Regression Guard",
+  "active": false,
+  "nodes": [
+    {
+      "id": "wh-evo",
+      "name": "Webhook Evolution Complete",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 400],
+      "webhookId": "evolution-complete",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "evolution-complete",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "http://api:8000,http://n8n:5678"
+        }
+      }
+    },
+    {
+      "id": "resp-202",
+      "name": "Respond 202",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [420, 400],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'accepted' }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      }
+    },
+    {
+      "id": "code-norm",
+      "name": "Normalize Webhook",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 400],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const root = $input.first().json || {};\nconst body = (root.body && typeof root.body === 'object') ? root.body : root;\nreturn [{\n  json: {\n    run_id: body.run_id,\n    event_type: body.event_type,\n    champion_avg: body.champion_avg,\n  },\n}];\n"
+      }
+    },
+    {
+      "id": "get-gens",
+      "name": "GET Eval Generations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [860, 400],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/eval/generations",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "get-adapters",
+      "name": "GET Adapters",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 400],
+      "parameters": {
+        "method": "GET",
+        "url": "http://api:8000/api/adapters",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-check",
+      "name": "Regression Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 400],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const gensRaw = $('GET Eval Generations').first().json;\nconst adaptersBody = $input.first().json || {};\nconst adapters = Array.isArray(adaptersBody.adapters) ? adaptersBody.adapters : [];\nconst garr = Array.isArray(gensRaw) ? gensRaw : [];\nif (garr.length < 2) {\n  return [{ json: { need_rollback: false, reason: 'insufficient history' } }];\n}\nconst last = garr[garr.length - 1];\nconst prev = garr[garr.length - 2];\nconst lastAvg = Number(last.avg_score);\nconst prevAvg = Number(prev.avg_score);\nconst regress = Number.isFinite(lastAvg) && Number.isFinite(prevAvg) && lastAvg < prevAvg * 0.995;\nif (!regress) {\n  return [{ json: { need_rollback: false, lastAvg, prevAvg } }];\n}\nconst targetGen = prev.generation;\nconst candidates = adapters.filter((a) => Number(a.generation) === Number(targetGen));\nconst target = candidates.sort((a, b) => (b.size_mb || 0) - (a.size_mb || 0))[0];\nif (!target || !target.adapter_id) {\n  return [{ json: { need_rollback: false, reason: 'no adapter for previous gen' } }];\n}\nreturn [{\n  json: {\n    need_rollback: true,\n    rollback_id: target.adapter_id,\n    rollback_url: `http://api:8000/api/adapters/${encodeURIComponent(target.adapter_id)}/rollback`,\n    lastAvg,\n    prevAvg,\n  },\n}];\n"
+      }
+    },
+    {
+      "id": "if-regress",
+      "name": "Rollback Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1520, 400],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "rb",
+              "leftValue": "={{ $json.need_rollback }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "post-rollback",
+      "name": "POST Rollback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.rollback_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-slack-ok",
+      "name": "Slack Rollback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 300],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const chk = $('Regression Check').first().json || {};\nconst slack_message = `:warning: *Regression guard* — rolled back to \\`${chk.rollback_id}\\` (last avg ${chk.lastAvg?.toFixed?.(4)} < prev ${chk.prevAvg?.toFixed?.(4)}).`;\nreturn [{ json: { slack_message } }];\n"
+      }
+    },
+    {
+      "id": "code-slack-no",
+      "name": "Slack OK",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 520],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const chk = $('Regression Check').first().json || {};\nconst slack_message = `:white_check_mark: *Regression guard* — no rollback (${chk.reason || 'scores stable'}).`;\nreturn [{ json: { slack_message } }];\n"
+      }
+    },
+    {
+      "id": "if-slack",
+      "name": "Slack Configured?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2200, 400],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "slack",
+              "leftValue": "={{ $env.SLACK_WEBHOOK_URL }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "slack-out",
+      "name": "Slack Notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2420, 360],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slack_message }) }}",
+        "options": {
+          "timeout": 8000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "err-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [200, 680],
+      "parameters": {}
+    },
+    {
+      "id": "err-forward",
+      "name": "POST Workflow Error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 680],
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/api/system/alerts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ alert_type: 'workflow_error', severity: 'warning', source: 'regression-guard', extra: { detail: $json.error?.message || 'workflow error' } }) }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Evolution Complete": {
+      "main": [
+        [
+          {
+            "node": "Respond 202",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond 202": {
+      "main": [
+        [
+          {
+            "node": "Normalize Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Webhook": {
+      "main": [
+        [
+          {
+            "node": "GET Eval Generations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Eval Generations": {
+      "main": [
+        [
+          {
+            "node": "GET Adapters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Adapters": {
+      "main": [
+        [
+          {
+            "node": "Regression Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Regression Check": {
+      "main": [
+        [
+          {
+            "node": "Rollback Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rollback Needed?": {
+      "main": [
+        [
+          {
+            "node": "POST Rollback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST Rollback": {
+      "main": [
+        [
+          {
+            "node": "Slack Rollback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Rollback": {
+      "main": [
+        [
+          {
+            "node": "Slack Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack OK": {
+      "main": [
+        [
+          {
+            "node": "Slack Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Configured?": {
+      "main": [
+        [
+          {
+            "node": "Slack Notify",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "POST Workflow Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "description": "Webhook evolution-complete from N8N_WEBHOOK_EVOLUTION_COMPLETE_URL — compares last two eval generations, optional POST rollback, Slack. Register webhook path in n8n and set API env."
+}

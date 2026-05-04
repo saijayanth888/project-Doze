@@ -4,7 +4,9 @@ import Layout from './components/layout/Layout';
 
 const LandingPage = lazy(() => import('./pages/LandingPage'));
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const AdaptersPage = lazy(() => import('./pages/AdaptersPage'));
 const LineagePage = lazy(() => import('./pages/LineagePage'));
+const DatasetsPage = lazy(() => import('./pages/DatasetsPage'));
 const BenchmarksPage = lazy(() => import('./pages/BenchmarksPage'));
 const PlaygroundPage = lazy(() => import('./pages/PlaygroundPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
@@ -35,7 +37,9 @@ export default function App() {
           <Route path="/" element={<LandingPage />} />
           <Route element={<Layout />}>
             <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/adapters" element={<AdaptersPage />} />
             <Route path="/lineage" element={<LineagePage />} />
+            <Route path="/datasets" element={<DatasetsPage />} />
             <Route path="/benchmarks" element={<BenchmarksPage />} />
             <Route path="/playground" element={<PlaygroundPage />} />
             <Route path="/settings" element={<SettingsPage />} />

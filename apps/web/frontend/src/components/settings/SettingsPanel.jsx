@@ -1,6 +1,17 @@
-import { useState } from 'react';
-import { Eye, EyeOff, Save } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Eye, EyeOff, Save, Trash2, Sparkles, HardDrive, Clock } from 'lucide-react';
+import { C, F } from '../../config/colors';
+import {
+  fetchPresets,
+  savePreset,
+  deletePreset,
+  fetchAdapters,
+  cleanupAdapters,
+} from '../../config/api';
 import MagneticButton from '../shared/MagneticButton';
+
+const AUTOSCHEDULE_KEY = 'mf_autoschedule';
 
 function Section({ title, children }) {
   return (
@@ -143,6 +154,13 @@ function Select({ label, value, onChange, options }) {
 }
 
 export default function SettingsPanel() {
+  const navigate = useNavigate();
+  const [presets, setPresets] = useState([]);
+  const [newPresetName, setNewPresetName] = useState('');
+  const [adapterSummary, setAdapterSummary] = useState({ total_disk_mb: 0, count: 0 });
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [autoSchedule, setAutoSchedule] = useState({ enabled: false, intervalHours: 24 });
+
   const [cfg, setCfg] = useState({
     mutationRate: 5,
     temperature: 72,
@@ -161,13 +179,274 @@ export default function SettingsPanel() {
   function set(k, v) { setCfg(c => ({ ...c, [k]: v })); }
   const [saved, setSaved] = useState(false);
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(AUTOSCHEDULE_KEY);
+      if (raw) setAutoSchedule(JSON.parse(raw));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [p, a] = await Promise.all([
+          fetchPresets(),
+          fetchAdapters(),
+        ]);
+        if (!cancelled && p?.presets) setPresets(p.presets);
+        if (!cancelled && a) {
+          setAdapterSummary({
+            total_disk_mb: a.total_disk_mb ?? 0,
+            count: a.adapters?.length ?? 0,
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  function persistAutoSchedule(next) {
+    setAutoSchedule(next);
+    try {
+      localStorage.setItem(AUTOSCHEDULE_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  }
+
   function handleSave() {
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   }
 
+  async function handleCreatePreset() {
+    const name = newPresetName.trim();
+    if (!name) return;
+    try {
+      await savePreset(name, {
+        base_model: cfg.model,
+        max_generations: cfg.maxGenerations,
+        lora_rank: 16,
+        lora_alpha: 32,
+        learning_rate: 2e-4,
+        batch_size: 2,
+        max_samples: 3000,
+      });
+      setNewPresetName('');
+      const p = await fetchPresets();
+      if (p?.presets) setPresets(p.presets);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function handleDeletePreset(name, isBuiltin) {
+    if (isBuiltin) return;
+    try {
+      await deletePreset(name);
+      const p = await fetchPresets();
+      if (p?.presets) setPresets(p.presets);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function handleCleanup() {
+    setCleanupBusy(true);
+    try {
+      await cleanupAdapters({ older_than_days: 30, keep_promoted: 5 });
+      const a = await fetchAdapters();
+      if (a) {
+        setAdapterSummary({
+          total_disk_mb: a.total_disk_mb ?? 0,
+          count: a.adapters?.length ?? 0,
+        });
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setCleanupBusy(false);
+    }
+  }
+
   return (
     <div>
+      <Section title="EVOLUTION PRESETS">
+        <p style={{ fontSize: 12, color: C.txtM, fontFamily: F.ui, marginBottom: 12 }}>
+          Built-in presets are read-only. &quot;Use&quot; opens the dashboard with that preset selected.
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+          {presets.map((p) => (
+            <div
+              key={p.name}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                padding: '10px 12px',
+                background: C.bgI,
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+              }}
+            >
+              <div style={{ fontFamily: F.mono, fontSize: 13, color: C.txtS }}>
+                {p.name}
+                {p.is_builtin ? (
+                  <span style={{ marginLeft: 8, fontSize: 11, color: C.txtM }}>(built-in)</span>
+                ) : null}
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/dashboard?preset=${encodeURIComponent(p.name)}`)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '4px 10px',
+                    fontSize: 11,
+                    fontFamily: F.ui,
+                    background: C.accDim,
+                    border: `1px solid ${C.borderA}`,
+                    borderRadius: 6,
+                    color: C.acc,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Sparkles size={12} /> Use
+                </button>
+                {!p.is_builtin ? (
+                  <button
+                    type="button"
+                    onClick={() => handleDeletePreset(p.name, p.is_builtin)}
+                    style={{
+                      padding: '4px 8px',
+                      background: 'transparent',
+                      border: `1px solid ${C.border}`,
+                      borderRadius: 6,
+                      color: C.danger,
+                      cursor: 'pointer',
+                    }}
+                    aria-label={`Delete ${p.name}`}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div style={{ flex: '1 1 180px' }}>
+            <label style={{ fontSize: 11, color: C.txtM, fontFamily: F.ui }}>New preset name</label>
+            <input
+              value={newPresetName}
+              onChange={(e) => setNewPresetName(e.target.value)}
+              placeholder="my-preset"
+              style={{
+                marginTop: 4,
+                width: '100%',
+                padding: '8px 10px',
+                background: C.bgS,
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+                color: C.txtP,
+                fontFamily: F.mono,
+                fontSize: 13,
+              }}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={handleCreatePreset}
+            style={{
+              padding: '8px 14px',
+              background: C.indDim,
+              border: `1px solid ${C.borderI}`,
+              borderRadius: 8,
+              color: C.ind,
+              fontFamily: F.ui,
+              fontSize: 12,
+              cursor: 'pointer',
+            }}
+          >
+            Save current sliders as preset
+          </button>
+        </div>
+      </Section>
+
+      <Section title="ADAPTER STORAGE">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+          <HardDrive size={18} color={C.acc} aria-hidden />
+          <div style={{ fontFamily: F.mono, fontSize: 13, color: C.txtS }}>
+            {adapterSummary.count} adapters · {(adapterSummary.total_disk_mb ?? 0).toFixed(1)} MB total
+          </div>
+        </div>
+        <button
+          type="button"
+          disabled={cleanupBusy}
+          onClick={handleCleanup}
+          style={{
+            padding: '8px 16px',
+            background: cleanupBusy ? C.bgE : C.warningDim,
+            border: `1px solid ${C.border}`,
+            borderRadius: 8,
+            color: C.warning,
+            fontFamily: F.ui,
+            fontSize: 13,
+            cursor: cleanupBusy ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {cleanupBusy ? 'Cleaning…' : 'Cleanup (30d, keep 5 promoted)'}
+        </button>
+      </Section>
+
+      <Section title="AUTO-EVOLUTION SCHEDULE">
+        <p style={{ fontSize: 12, color: C.txtM, fontFamily: F.ui, marginBottom: 12 }}>
+          <Clock size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+          Toggle is stored locally. Configure the matching cron in n8n (
+          <code style={{ color: C.txtS }}>evolution-scheduler.json</code>
+          ) separately.
+        </p>
+        <Toggle
+          label="Enable auto-evolution window"
+          value={autoSchedule.enabled}
+          onChange={(v) => persistAutoSchedule({ ...autoSchedule, enabled: v })}
+          description="When on, your scheduled n8n workflow can start runs without manual action."
+        />
+        <div style={{ marginTop: 12 }}>
+          <label style={{ fontSize: 12, color: C.txtM, fontFamily: F.ui }}>Interval (hours)</label>
+          <input
+            type="number"
+            min={1}
+            value={autoSchedule.intervalHours}
+            onChange={(e) =>
+              persistAutoSchedule({
+                ...autoSchedule,
+                intervalHours: Math.max(1, parseInt(e.target.value, 10) || 1),
+              })
+            }
+            style={{
+              marginTop: 4,
+              width: 120,
+              padding: '8px 10px',
+              background: '#0c1018',
+              border: '1px solid #1e293b',
+              borderRadius: 8,
+              color: '#94a3b8',
+              fontFamily: 'JetBrains Mono',
+              fontSize: 13,
+            }}
+          />
+        </div>
+      </Section>
+
       <Section title="EVOLUTION PARAMETERS">
         <Slider label="Mutation Rate" value={cfg.mutationRate} onChange={v => set('mutationRate', v)} min={1} max={20} step={1} unit="%" />
         <Slider label="Temperature" value={cfg.temperature} onChange={v => set('temperature', v)} min={1} max={200} step={1} unit="" />

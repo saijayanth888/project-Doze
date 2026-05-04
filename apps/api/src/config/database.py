@@ -8,6 +8,7 @@ folder.
 
 from __future__ import annotations
 
+import json
 import logging
 
 import asyncpg
@@ -62,6 +63,7 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
         training_data_size  INT NOT NULL DEFAULT 0,
         duration_seconds    DOUBLE PRECISION NOT NULL DEFAULT 0,
         data                JSONB NOT NULL DEFAULT '{}'::jsonb,
+        archived            BOOLEAN NOT NULL DEFAULT FALSE,
         created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (run_id, generation)
     )
@@ -102,7 +104,16 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
         response        TEXT NOT NULL,
         embedding       vector(384),
         quality_score   FLOAT,
+        content_hash    TEXT,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS evolution_presets (
+        name        TEXT PRIMARY KEY,
+        is_builtin  BOOLEAN NOT NULL DEFAULT FALSE,
+        config      JSONB NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_runs_status ON evolution_runs(status)",
@@ -113,7 +124,101 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_train_hnsw ON training_samples USING hnsw (embedding vector_cosine_ops) WITH (m=16, ef_construction=64)",
     "CREATE INDEX IF NOT EXISTS idx_train_gen ON training_samples(generation)",
     "CREATE INDEX IF NOT EXISTS idx_train_cat ON training_samples(category)",
+    "CREATE INDEX IF NOT EXISTS idx_train_hash ON training_samples(content_hash) WHERE content_hash IS NOT NULL",
+    "ALTER TABLE generations ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE training_samples ADD COLUMN IF NOT EXISTS content_hash TEXT",
 )
+
+
+_BUILTIN_PRESET_CONFIGS: list[tuple[str, bool, dict]] = [
+    (
+        "quick-test",
+        True,
+        {
+            "base_model": "llama3.2:3b",
+            "max_generations": 2,
+            "lora_rank": 8,
+            "lora_alpha": 16,
+            "learning_rate": 2e-4,
+            "batch_size": 2,
+            "max_samples": 500,
+            "benchmark_focus": ["mmlu"],
+        },
+    ),
+    (
+        "standard",
+        True,
+        {
+            "base_model": "llama3.2:3b",
+            "max_generations": 10,
+            "lora_rank": 16,
+            "lora_alpha": 32,
+            "learning_rate": 2e-4,
+            "batch_size": 2,
+            "max_samples": 3000,
+        },
+    ),
+    (
+        "deep-evolution",
+        True,
+        {
+            "base_model": "llama3.2:3b",
+            "max_generations": 25,
+            "lora_rank": 32,
+            "lora_alpha": 64,
+            "learning_rate": 1.5e-4,
+            "batch_size": 2,
+            "max_samples": 5000,
+        },
+    ),
+    (
+        "code-specialist",
+        True,
+        {
+            "base_model": "llama3.2:3b",
+            "max_generations": 15,
+            "lora_rank": 16,
+            "lora_alpha": 32,
+            "learning_rate": 2e-4,
+            "batch_size": 2,
+            "max_samples": 3000,
+            "benchmark_focus": ["humaneval", "gsm8k"],
+        },
+    ),
+    (
+        "reasoning-specialist",
+        True,
+        {
+            "base_model": "llama3.2:3b",
+            "max_generations": 15,
+            "lora_rank": 16,
+            "lora_alpha": 32,
+            "learning_rate": 2e-4,
+            "batch_size": 2,
+            "max_samples": 3000,
+            "benchmark_focus": ["arc_challenge", "hellaswag"],
+        },
+    ),
+]
+
+
+async def seed_builtin_presets(pool: asyncpg.Pool | None) -> None:
+    """Idempotent insert of built-in evolution presets."""
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        for name, is_builtin, cfg in _BUILTIN_PRESET_CONFIGS:
+            await conn.execute(
+                """
+                INSERT INTO evolution_presets (name, is_builtin, config)
+                VALUES ($1, $2, $3::jsonb)
+                ON CONFLICT (name) DO NOTHING
+                """,
+                name,
+                is_builtin,
+                json.dumps(cfg),
+            )
+    logger.info("Built-in evolution presets ensured")
 
 
 async def init_db() -> asyncpg.Pool:
@@ -132,6 +237,7 @@ async def init_db() -> asyncpg.Pool:
     async with _pool.acquire() as conn:
         for statement in _SCHEMA_STATEMENTS:
             await conn.execute(statement)
+    await seed_builtin_presets(_pool)
     logger.info("Database schema initialized")
     return _pool
 

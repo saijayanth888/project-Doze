@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from config.redis_pool import get_redis
 from services.lineage_db import LineageDB
 from services.mock_data import mock_activity_feed
 
@@ -110,6 +111,52 @@ async def ws_evolution(websocket: WebSocket, run_id: str) -> None:
         except Exception:
             pass
     finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+@router.websocket("/ws/training/{run_id}")
+async def ws_training_metrics(websocket: WebSocket, run_id: str) -> None:
+    """Stream LoRA training metrics from Redis pub/sub ``training:{run_id}``."""
+    await websocket.accept()
+    r = await get_redis()
+    if r is None:
+        await websocket.send_text(json.dumps({"error": "redis_unavailable"}))
+        await websocket.close()
+        return
+
+    pubsub = r.pubsub()
+    channel = f"training:{run_id}"
+    await pubsub.subscribe(channel)
+    logger.info("WS /ws/training/%s: subscribed to %s", run_id, channel)
+
+    try:
+        async for msg in pubsub.listen():
+            if msg is None:
+                continue
+            if msg.get("type") != "message":
+                continue
+            data = msg.get("data")
+            if data:
+                await websocket.send_text(data if isinstance(data, str) else str(data))
+                try:
+                    obj = json.loads(data)
+                    if isinstance(obj, dict) and obj.get("event") == "done":
+                        break
+                except Exception:
+                    pass
+    except WebSocketDisconnect:
+        logger.info("WS /ws/training/%s: client disconnected", run_id)
+    except Exception as exc:
+        logger.error("WS /ws/training/%s: %s", run_id, exc)
+    finally:
+        try:
+            await pubsub.unsubscribe(channel)
+            await pubsub.close()
+        except Exception:
+            pass
         try:
             await websocket.close()
         except Exception:

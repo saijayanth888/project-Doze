@@ -8,12 +8,15 @@ wheels installed.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import random
 import time
 from dataclasses import dataclass
 from typing import Protocol
+
+from config.settings import settings
 
 logger = logging.getLogger("modelforge.agents.training")
 
@@ -42,8 +45,12 @@ class MockTrainingBackend:
     async def train(self, *, run_id: str, generation: int, config: dict) -> TrainingResult:
         logger.info("[mock-train] run=%s gen=%d sleep=%.2fs", run_id, generation, self._sleep_s)
         await asyncio.sleep(self._sleep_s)
+        out = (
+            settings.resolve_data_root() / "adapters" / run_id / f"gen-{generation}"
+        )
+        out.mkdir(parents=True, exist_ok=True)
         return TrainingResult(
-            adapter_path=f"adapters/{run_id}/gen-{generation}/adapter_model.safetensors",
+            adapter_path=str(out / "adapter_model.safetensors"),
             method="lora",
             training_data_size=random.randint(800, 1200),
             duration_seconds=self._sleep_s,
@@ -82,14 +89,51 @@ class LoRATrainingBackend:
         )
 
     def _train_sync(self, run_id: str, generation: int, config: dict) -> TrainingResult:
+        import redis
         import torch
         from datasets import load_dataset
         from peft import LoraConfig, PeftModel, get_peft_model
-        from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+        from transformers import (
+            AutoModelForCausalLM,
+            AutoTokenizer,
+            TrainerCallback,
+            TrainingArguments,
+        )
         from trl import SFTTrainer
 
+        class _RedisMetricsCallback(TrainerCallback):
+            def __init__(self, rid: str) -> None:
+                self._run_id = rid
+                self._r = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+
+            def on_log(self, args, state, control, logs=None, **kwargs):
+                if logs is None:
+                    return
+                tps = 0.0
+                tss = logs.get("train_samples_per_second")
+                if tss is not None:
+                    tps = float(tss) * 100.0
+                payload = {
+                    "step": int(getattr(state, "global_step", 0) or 0),
+                    "loss": float(logs.get("loss") or 0),
+                    "lr": float(logs.get("learning_rate") or 0),
+                    "epoch": float(logs.get("epoch") or 0),
+                    "tokens_per_sec": tps,
+                }
+                try:
+                    self._r.publish(f"training:{self._run_id}", json.dumps(payload))
+                except Exception as exc:
+                    logger.debug("redis publish skip: %s", exc)
+
+            def on_train_end(self, args, state, control, **kwargs):
+                try:
+                    self._r.publish(f"training:{self._run_id}", json.dumps({"event": "done"}))
+                except Exception:
+                    pass
+
         base_model = str(config.get("base_model") or "meta-llama/Llama-3.1-8B-Instruct")
-        output_dir = f"data/adapters/{run_id}/gen-{generation}"
+        dr = settings.resolve_data_root()
+        output_dir = str(dr / "adapters" / run_id / f"gen-{generation}")
         os.makedirs(output_dir, exist_ok=True)
 
         t0 = time.perf_counter()
@@ -107,7 +151,7 @@ class LoRATrainingBackend:
         # Parent adapter: explicit in config or previous generation's adapter dir (if present).
         parent_adapter = config.get("parent_adapter_path")
         if not parent_adapter and generation > 1:
-            guess = f"data/adapters/{run_id}/gen-{generation-1}"
+            guess = str(dr / "adapters" / run_id / f"gen-{generation-1}")
             if os.path.isdir(guess):
                 parent_adapter = guess
 
@@ -150,6 +194,7 @@ class LoRATrainingBackend:
             train_dataset=dataset,
             dataset_text_field="text",
             max_seq_length=int(config.get("max_seq_length", 512)),
+            callbacks=[_RedisMetricsCallback(run_id)],
         )
         trainer.train()
 

@@ -1,0 +1,222 @@
+{
+  "name": "Auto Cleanup Adapters",
+  "active": false,
+  "nodes": [
+    {
+      "id": "sched-24h",
+      "name": "Every 24 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 320],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "post-cleanup",
+      "name": "POST Adapter Cleanup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 320],
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/api/adapters/cleanup?older_than_days=30&keep_promoted=5",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-slack",
+      "name": "Build Slack Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 320],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const j = $input.first().json || {};\nconst ids = Array.isArray(j.adapter_ids) ? j.adapter_ids : [];\nconst mb = Number(j.reclaimed_mb || 0);\nconst slack_message = ids.length\n  ? `:broom: *Adapter auto-cleanup* — removed ${ids.length} adapters (~${mb.toFixed(1)} MB): ${ids.slice(0, 10).join(', ')}${ids.length > 10 ? '…' : ''}`\n  : `:white_check_mark: *Adapter auto-cleanup* — nothing removed.`;\nreturn [{ json: { slack_message } }];\n"
+      }
+    },
+    {
+      "id": "if-slack",
+      "name": "Slack Configured?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [940, 320],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "slack",
+              "leftValue": "={{ $env.SLACK_WEBHOOK_URL }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "slack-notify",
+      "name": "Slack Notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1180, 260],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.slack_message }) }}",
+        "options": {
+          "timeout": 8000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "err-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [200, 560],
+      "parameters": {}
+    },
+    {
+      "id": "err-forward",
+      "name": "POST Workflow Error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 560],
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/api/system/alerts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MODELFORGE_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ alert_type: 'workflow_error', severity: 'warning', source: 'auto-cleanup', extra: { detail: $json.error?.message || 'workflow error' } }) }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 24 Hours": {
+      "main": [
+        [
+          {
+            "node": "POST Adapter Cleanup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST Adapter Cleanup": {
+      "main": [
+        [
+          {
+            "node": "Build Slack Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Slack Summary": {
+      "main": [
+        [
+          {
+            "node": "Slack Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Configured?": {
+      "main": [
+        [
+          {
+            "node": "Slack Notify",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "POST Workflow Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "description": "Cron (24h) → POST /api/adapters/cleanup — optional Slack. Uses MODELFORGE_API_KEY and SLACK_WEBHOOK_URL."
+}

@@ -28,7 +28,7 @@ async def _check_postgres(db: LineageDB) -> str:
 async def _check_redis() -> str:
     """Ping Redis using the configured URL (settings.redis_url)."""
     try:
-        import redis.asyncio as aioredis  # type: ignore
+        import redis.asyncio as aioredis
 
         client = aioredis.from_url(settings.redis_url, socket_connect_timeout=2)
         try:

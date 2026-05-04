@@ -35,17 +35,25 @@ class LineageDB:
             return False
 
     # ── Generations ────────────────────────────────────────────────
-    async def get_all_generations(self, run_id: str | None = None) -> list[dict]:
+    async def get_all_generations(
+        self,
+        run_id: str | None = None,
+        *,
+        include_archived: bool = True,
+    ) -> list[dict]:
         if self._pool is None:
             return []
+        extra = "" if include_archived else " AND (archived IS NULL OR archived = FALSE)"
         async with self._pool.acquire() as conn:
             if run_id is not None:
                 rows = await conn.fetch(
-                    "SELECT * FROM generations WHERE run_id = $1 ORDER BY generation ASC",
+                    f"SELECT * FROM generations WHERE run_id = $1{extra} ORDER BY generation ASC",
                     run_id,
                 )
             else:
-                rows = await conn.fetch("SELECT * FROM generations ORDER BY generation ASC")
+                rows = await conn.fetch(
+                    f"SELECT * FROM generations WHERE TRUE{extra} ORDER BY generation ASC"
+                )
             return [dict(r) for r in rows]
 
     async def get_generation(self, run_id: str, generation: int) -> dict | None:
@@ -73,6 +81,7 @@ class LineageDB:
         method = gen_data.get("method")
         training_size = int(gen_data.get("training_data_size", 0))
         duration = float(gen_data.get("duration_seconds", 0.0))
+        archived = bool(gen_data.get("archived", False))
 
         async with self._pool.acquire() as conn:
             await conn.execute(
@@ -80,9 +89,9 @@ class LineageDB:
                 INSERT INTO generations (
                     run_id, generation, promoted, is_champion,
                     weak_categories, parent_scores, child_scores, decision_reason, method,
-                    training_data_size, duration_seconds, data
+                    training_data_size, duration_seconds, data, archived
                 )
-                VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb)
+                VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12::jsonb, $13)
                 ON CONFLICT (run_id, generation) DO UPDATE SET
                     promoted          = EXCLUDED.promoted,
                     is_champion       = EXCLUDED.is_champion,
@@ -93,7 +102,8 @@ class LineageDB:
                     method            = EXCLUDED.method,
                     training_data_size= EXCLUDED.training_data_size,
                     duration_seconds  = EXCLUDED.duration_seconds,
-                    data              = EXCLUDED.data
+                    data              = EXCLUDED.data,
+                    archived          = EXCLUDED.archived
                 """,
                 run_id,
                 generation,
@@ -107,6 +117,7 @@ class LineageDB:
                 training_size,
                 duration,
                 json.dumps(gen_data, default=str),
+                archived,
             )
 
     # ── Evolution runs ─────────────────────────────────────────────
@@ -325,7 +336,7 @@ class LineageDB:
             dim = len(vecs_a[0])
             centroid_a = [sum(v[i] for v in vecs_a) / len(vecs_a) for i in range(dim)]
             centroid_b = [sum(v[i] for v in vecs_b) / len(vecs_b) for i in range(dim)]
-            drift = math.sqrt(sum((a - b) ** 2 for a, b in zip(centroid_a, centroid_b)))
+            drift = math.sqrt(sum((a - b) ** 2 for a, b in zip(centroid_a, centroid_b, strict=False)))
             return {
                 "generation_a": int(gen_a),
                 "generation_b": int(gen_b),
@@ -336,3 +347,144 @@ class LineageDB:
                 if drift < 0.3
                 else "significant",
             }
+
+    # ── Generations: champion / archive ─────────────────────────────
+    async def set_generation_archived(self, run_id: str, generation: int, archived: bool = True) -> None:
+        if self._pool is None:
+            return
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE generations SET archived = $3
+                WHERE run_id = $1 AND generation = $2
+                """,
+                run_id,
+                int(generation),
+                archived,
+            )
+
+    async def clear_all_champions(self) -> None:
+        if self._pool is None:
+            return
+        async with self._pool.acquire() as conn:
+            await conn.execute("UPDATE generations SET is_champion = FALSE")
+
+    async def set_champion_generation(self, run_id: str, generation: int) -> None:
+        """Mark exactly one row as champion (clears other champion flags)."""
+        if self._pool is None:
+            return
+        async with self._pool.acquire() as conn:
+            await conn.execute("UPDATE generations SET is_champion = FALSE")
+            await conn.execute(
+                """
+                UPDATE generations SET is_champion = TRUE
+                WHERE run_id = $1 AND generation = $2
+                """,
+                run_id,
+                int(generation),
+            )
+
+    # ── Evolution presets ───────────────────────────────────────────
+    async def list_evolution_presets(self) -> list[dict]:
+        if self._pool is None:
+            return []
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM evolution_presets ORDER BY name ASC")
+            return [dict(r) for r in rows]
+
+    async def get_evolution_preset(self, name: str) -> dict | None:
+        if self._pool is None:
+            return None
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM evolution_presets WHERE name = $1",
+                name,
+            )
+            return dict(row) if row else None
+
+    async def upsert_evolution_preset(self, name: str, config: dict, *, is_builtin: bool = False) -> None:
+        if self._pool is None:
+            return
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO evolution_presets (name, is_builtin, config)
+                VALUES ($1, $2, $3::jsonb)
+                ON CONFLICT (name) DO UPDATE SET
+                    config = EXCLUDED.config,
+                    is_builtin = EXCLUDED.is_builtin
+                """,
+                name,
+                is_builtin,
+                json.dumps(config),
+            )
+
+    async def delete_evolution_preset(self, name: str) -> bool:
+        """Return True if a row was deleted."""
+        if self._pool is None:
+            return False
+        async with self._pool.acquire() as conn:
+            res = await conn.execute(
+                "DELETE FROM evolution_presets WHERE name = $1 AND is_builtin = FALSE",
+                name,
+            )
+            # asyncpg returns "DELETE N"
+            try:
+                return int(res.split()[-1]) > 0
+            except (ValueError, IndexError):
+                return False
+
+    # ── Training sample hashes (upload dedup / overlap) ────────────
+    async def find_existing_content_hashes(self, hashes: list[str]) -> set[str]:
+        if self._pool is None or not hashes:
+            return set()
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT DISTINCT content_hash FROM training_samples WHERE content_hash = ANY($1::text[])",
+                hashes,
+            )
+            return {str(r["content_hash"]) for r in rows if r.get("content_hash")}
+
+    async def insert_training_sample_row(
+        self,
+        *,
+        generation: int,
+        source: str,
+        dataset_name: str | None,
+        category: str | None,
+        instruction: str,
+        response: str,
+        content_hash: str | None,
+    ) -> None:
+        if self._pool is None:
+            return
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO training_samples
+                    (generation, source, dataset_name, category, instruction, response, content_hash)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """,
+                int(generation),
+                source,
+                dataset_name,
+                category,
+                instruction,
+                response,
+                content_hash,
+            )
+
+    async def count_hash_overlap_excluding_dataset(self, hashes: list[str], exclude_dataset: str) -> int:
+        if self._pool is None or not hashes:
+            return 0
+        async with self._pool.acquire() as conn:
+            n = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM training_samples
+                WHERE content_hash = ANY($1::text[])
+                  AND (dataset_name IS DISTINCT FROM $2)
+                """,
+                hashes,
+                exclude_dataset,
+            )
+            return int(n or 0)

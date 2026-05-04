@@ -2,9 +2,13 @@ import json
 import logging
 from pathlib import Path
 
+from config.settings import settings
+
 logger = logging.getLogger("modelforge.model_registry")
 
-_REGISTRY_PATH = Path(__file__).parent.parent.parent / "data" / "registry.json"
+
+def _registry_path() -> Path:
+    return settings.resolve_data_root() / "registry.json"
 _EMPTY_REGISTRY: dict = {"champion": None, "models": []}
 
 try:
@@ -18,7 +22,7 @@ except ImportError:
 
 class ModelRegistry:
     def __init__(self, registry_path: Path | None = None):
-        self._path = Path(registry_path) if registry_path else _REGISTRY_PATH
+        self._path = Path(registry_path) if registry_path else _registry_path()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         if not self._path.exists():
             self._save(_EMPTY_REGISTRY)

@@ -13,6 +13,7 @@ guards:
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -47,6 +48,10 @@ class Settings(BaseSettings):
     # ── Redis ──────────────────────────────────────────
     redis_url: str = "redis://localhost:6379"
 
+    # ── Data directory (adapters, curated, custom datasets, registry) ──
+    # Override with MODELFORGE_DATA_ROOT. Default: ./data if present else apps/api/data.
+    modelforge_data_root: str | None = Field(default=None, alias="MODELFORGE_DATA_ROOT")
+
     # ── Inference backends ─────────────────────────────
     ollama_host: str = "http://localhost:11434"
     vllm_host: str = "http://localhost:8001"
@@ -63,6 +68,11 @@ class Settings(BaseSettings):
     )
     # Optional HMAC for evolution webhook (shared with n8n Code node / $env.N8N_WEBHOOK_SECRET).
     n8n_webhook_secret: str | None = Field(default=None, alias="N8N_WEBHOOK_SECRET")
+    n8n_webhook_dataset_url: str | None = Field(default=None, alias="N8N_WEBHOOK_DATASET_URL")
+    n8n_webhook_adapter_url: str | None = Field(default=None, alias="N8N_WEBHOOK_ADAPTER_URL")
+    n8n_webhook_evolution_complete_url: str | None = Field(
+        default=None, alias="N8N_WEBHOOK_EVOLUTION_COMPLETE_URL"
+    )
 
     # ── External APIs (optional) ───────────────────────
     hf_token: str | None = None
@@ -100,6 +110,17 @@ class Settings(BaseSettings):
     @property
     def cors_has_wildcard(self) -> bool:
         return "*" in self.cors_origin_list
+
+    def resolve_data_root(self) -> Path:
+        """Resolve writable data directory (Docker: /app/data; local: repo ./data)."""
+        if self.modelforge_data_root:
+            return Path(self.modelforge_data_root).expanduser().resolve()
+        cwd_data = Path.cwd() / "data"
+        if cwd_data.is_dir():
+            return cwd_data.resolve()
+        # apps/api/data — src/config/settings.py → parents[2] == apps/api
+        pkg_default = Path(__file__).resolve().parent.parent.parent / "data"
+        return pkg_default.resolve()
 
     def validate_for_runtime(self) -> None:
         """Raise if the configuration is unsafe for the chosen environment.

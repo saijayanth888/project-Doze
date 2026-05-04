@@ -23,6 +23,23 @@ def _sign_evolution_payload(payload: dict[str, Any], secret: str) -> str:
     return f"sha256={digest}"
 
 
+async def _post_json(url: str | None, payload: dict[str, Any]) -> None:
+    """POST JSON to ``url`` with optional HMAC signature; never raises."""
+    if not url:
+        return
+    body_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    secret = (settings.n8n_webhook_secret or "").strip()
+    if secret:
+        headers["X-Webhook-Signature"] = _sign_evolution_payload(payload, secret)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, content=body_bytes, headers=headers)
+            resp.raise_for_status()
+    except Exception as exc:
+        logger.warning("n8n webhook POST failed (%s): %s", url, exc)
+
+
 async def post_evolution_event(payload: dict[str, Any]) -> None:
     """POST ``payload`` to the configured n8n webhook (if any).
 
@@ -33,19 +50,53 @@ async def post_evolution_event(payload: dict[str, Any]) -> None:
     if not url:
         logger.debug("N8N_WEBHOOK_EVOLUTION_URL unset — skipping n8n notify")
         return
+    await _post_json(url, payload)
 
-    body_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    secret = (settings.n8n_webhook_secret or "").strip()
-    if secret:
-        headers["X-Webhook-Signature"] = _sign_evolution_payload(payload, secret)
 
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, content=body_bytes, headers=headers)
-            resp.raise_for_status()
-    except Exception as exc:
-        logger.warning("n8n webhook POST failed (%s): %s", url, exc)
+async def emit_dataset_uploaded(dataset_id: str, name: str, samples: int) -> None:
+    """Notify n8n after a custom dataset is uploaded."""
+    url = settings.n8n_webhook_dataset_url or settings.n8n_webhook_evolution_url
+    await _post_json(
+        url,
+        {
+            "event_type": "dataset-uploaded",
+            "dataset_id": dataset_id,
+            "name": name,
+            "samples": samples,
+        },
+    )
+
+
+async def emit_adapter_rollback(from_adapter: str, to_adapter: str, reason: str) -> None:
+    url = settings.n8n_webhook_adapter_url or settings.n8n_webhook_evolution_url
+    await _post_json(
+        url,
+        {
+            "event_type": "adapter-rollback",
+            "from": from_adapter,
+            "to": to_adapter,
+            "reason": reason,
+        },
+    )
+
+
+async def emit_adapter_deleted(adapter_id: str, reason: str = "") -> None:
+    url = settings.n8n_webhook_adapter_url or settings.n8n_webhook_evolution_url
+    await _post_json(
+        url,
+        {
+            "event_type": "adapter-deleted",
+            "adapter_id": adapter_id,
+            "reason": reason,
+        },
+    )
+
+
+async def emit_evolution_complete(run_id: str, summary: dict[str, Any]) -> None:
+    """Dedicated regression-guard / completion webhook (falls back to evolution URL)."""
+    url = settings.n8n_webhook_evolution_complete_url or settings.n8n_webhook_evolution_url
+    payload = {"event_type": "evolution-complete", "run_id": run_id, **summary}
+    await _post_json(url, payload)
 
 
 def build_evolution_payload(

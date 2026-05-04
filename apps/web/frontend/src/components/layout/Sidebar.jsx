@@ -1,6 +1,8 @@
 import {
   LayoutDashboard,
+  Layers,
   GitBranch,
+  Database,
   BarChart2,
   MessageSquare,
   Settings2,
@@ -14,7 +16,9 @@ import { useLocation, useNavigate } from 'react-router-dom';
 
 const NAV = [
   { id: 'dashboard', path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'adapters', path: '/adapters', label: 'Adapters', icon: Layers },
   { id: 'lineage', path: '/lineage', label: 'Lineage Tree', icon: GitBranch },
+  { id: 'datasets', path: '/datasets', label: 'Datasets', icon: Database },
   { id: 'benchmarks', path: '/benchmarks', label: 'Benchmarks', icon: BarChart2 },
   { id: 'playground', path: '/playground', label: 'Playground', icon: MessageSquare },
   { id: 'settings', path: '/settings', label: 'Settings', icon: Settings2 },
