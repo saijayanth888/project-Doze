@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     vllm_api_key: str | None = None
 
     # ── n8n ────────────────────────────────────────────
-    n8n_host: str = "http://localhost:5678"
+    n8n_host: str = "http://localhost:5679"
     n8n_basic_auth_user: str = "admin"
     n8n_basic_auth_password: str | None = None
     # Evolution agent POSTs JSON to this URL (production: n8n webhook).

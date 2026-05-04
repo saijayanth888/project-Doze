@@ -68,7 +68,7 @@ export N8N_OWNER_PASSWORD="${N8N_OWNER_PASSWORD:-$N8N_BASIC_AUTH_PASSWORD}"
 if [[ -z "${N8N_URL:-}" && -n "${N8N_WEBHOOK_URL:-}" ]]; then
   export N8N_URL="${N8N_WEBHOOK_URL%/}"
 fi
-export N8N_URL="${N8N_URL:-http://localhost:5678}"
+export N8N_URL="${N8N_URL:-http://localhost:5679}"
 
 echo "Waiting for n8n health + bootstrapping owner (${N8N_OWNER_EMAIL})…"
 exec "${ROOT}/scripts/n8n-wait-and-login.sh"

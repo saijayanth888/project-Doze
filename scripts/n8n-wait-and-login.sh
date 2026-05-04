@@ -12,7 +12,7 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-N8N_URL="${N8N_URL:-http://localhost:5678}"
+N8N_URL="${N8N_URL:-http://localhost:5679}"
 echo "Waiting for n8n at ${N8N_URL}/healthz …"
 for _ in $(seq 1 60); do
   if curl -fsS "${N8N_URL}/healthz" >/dev/null 2>&1; then
@@ -30,7 +30,7 @@ echo "  Basic auth user:  ${N8N_BASIC_AUTH_USER:-admin}"
 echo "  Owner email:      ${N8N_OWNER_EMAIL:-${N8N_EMAIL:-admin@modelforge.local}}"
 echo ""
 echo "  Import workflows:  integrations/n8n/workflows/*.json"
-echo "  Webhook (evolve):  ${N8N_WEBHOOK_URL:-http://localhost:5678/}webhook/evolution-events"
+echo "  Webhook (evolve):  ${N8N_WEBHOOK_URL:-http://localhost:5679/}webhook/evolution-events"
 echo ""
 
 export N8N_URL

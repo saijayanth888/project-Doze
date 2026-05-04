@@ -68,7 +68,7 @@ export default function SettingsPage() {
   const [apiBase, setApiBase] = useState(() => stored?.apiBase ?? '');
   const [ollama, setOllama] = useState(() => stored?.ollama ?? import.meta.env.VITE_OLLAMA_HOST ?? 'http://localhost:11434');
   const [vllm, setVllm] = useState(() => stored?.vllm ?? import.meta.env.VITE_VLLM_HOST ?? 'http://localhost:8001');
-  const [n8n, setN8n] = useState(() => stored?.n8n ?? import.meta.env.VITE_N8N_HOST ?? 'http://localhost:5678');
+  const [n8n, setN8n] = useState(() => stored?.n8n ?? import.meta.env.VITE_N8N_HOST ?? 'http://localhost:5679');
   const [model, setModel] = useState(() => stored?.model ?? 'llama3.2:3b');
   const [maxGen, setMaxGen] = useState(() => stored?.maxGen ?? 10);
   const [rank, setRank] = useState(() => stored?.rank ?? 16);
@@ -125,7 +125,7 @@ export default function SettingsPage() {
     setApiBase('');
     setOllama(import.meta.env.VITE_OLLAMA_HOST || 'http://localhost:11434');
     setVllm(import.meta.env.VITE_VLLM_HOST || 'http://localhost:8001');
-    setN8n(import.meta.env.VITE_N8N_HOST || 'http://localhost:5678');
+    setN8n(import.meta.env.VITE_N8N_HOST || 'http://localhost:5679');
     setModel('llama3.2:3b');
     setMaxGen(10);
     setRank(16);
@@ -182,7 +182,7 @@ export default function SettingsPage() {
         </div>
         <Field label="Ollama Host" value={ollama} onChange={setOllama} placeholder="http://localhost:11434" />
         <Field label="vLLM Host (DGX)" value={vllm} onChange={setVllm} placeholder="http://localhost:8001" />
-        <Field label="n8n Host" value={n8n} onChange={setN8n} placeholder="http://localhost:5678" />
+        <Field label="n8n Host" value={n8n} onChange={setN8n} placeholder="http://localhost:5679" />
         <div style={{ fontFamily: F.mono, fontSize: 11, color: C.txtM, marginTop: -6 }}>Override via VITE_* in frontend/.env or save here (localStorage).</div>
       </Section>
 

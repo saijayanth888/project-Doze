@@ -7,7 +7,7 @@ already exists.
 
 Usage (from repo root, stack running)::
 
-    export N8N_URL=http://localhost:5678
+    export N8N_URL=http://localhost:5679
     export N8N_BASIC_AUTH_USER=admin
     export N8N_BASIC_AUTH_PASSWORD=your-basic-auth-password
     export N8N_OWNER_EMAIL=admin@modelforge.local
@@ -23,7 +23,7 @@ import sys
 
 import httpx
 
-BASE = os.environ.get("N8N_URL", "http://localhost:5678").rstrip("/")
+BASE = os.environ.get("N8N_URL", "http://localhost:5679").rstrip("/")
 BASIC_USER = os.environ.get("N8N_BASIC_AUTH_USER", "admin")
 BASIC_PASS = os.environ.get("N8N_BASIC_AUTH_PASSWORD", "")
 OWNER_EMAIL = os.environ.get("N8N_OWNER_EMAIL", "admin@modelforge.local")

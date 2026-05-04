@@ -112,7 +112,7 @@ PLAYWRIGHT_BASE_URL=http://localhost:3001 npx playwright test
 
 (`MODELFORGE_WEB_HOST_PORT` may change the port; default in Compose is **3001**.)
 
-Playwright smoke hits n8n `healthz` via `N8N_URL` (default host port **5678**).
+Playwright smoke hits n8n `healthz` via `N8N_URL` (default host port **5679**).
 See `e2e/smoke.spec.ts`.
 
 CI runs backend lint/tests, frontend build + Playwright smoke, and Docker
@@ -172,14 +172,15 @@ Entries are high-level; use `git log` for full history.
 
 | Date (UTC) | Summary |
 | ---------- | ------- |
-| **2026-05-03** | Frontend Docker image rebuilt (`modelforge-frontend:latest`). Container health: `GET /healthz` → **200**. Playwright against `http://localhost:3001`: **7 passed**, **1 skipped** (optional n8n test). Design system handoff archived under `docs/`. n8n: default public webhook base on host **5678**; see `integrations/n8n/README.md`. **Lineage:** flex height chain from `Layout.jsx` → `LineagePage.jsx` → `LineageTree.jsx` so the SVG fills the panel (fixes collapsed/clipped tree). |
+| **2026-05-03** | Frontend Docker image rebuilt (`modelforge-frontend:latest`). Container health: `GET /healthz` → **200**. Playwright against `http://localhost:3001`: **7 passed**, **1 skipped** (optional n8n test). Design system handoff archived under `docs/`. n8n: default public webhook base on host **5679**; see `integrations/n8n/README.md`. **Lineage:** flex height chain from `Layout.jsx` → `LineagePage.jsx` → `LineageTree.jsx` so the SVG fills the panel (fixes collapsed/clipped tree). |
 | **2026-05-03 (pm)** | **n8n:** pinned image `n8nio/n8n:1.78.0`, compose healthcheck, evolution scheduler uses `/api/evolve/status` + env-driven start body, health workflow posts heartbeats, `error-handler.json` export, monitor Slack copy + dynamic 202 body, `N8N_WEBHOOK_SECRET` + HMAC header from API. **API:** `EvolutionPollStatus.is_running`, richer `build_evolution_payload`. **Frontend:** lazy routes + manualChunks, nginx CSP/COOP + asset cache + `index.html` no-cache, SEO meta, `robots.txt` / `sitemap.xml` / `security.txt`, `ErrorBoundary` + `ToastProvider`, functional Settings (persist API base + key, test connection), Lucide sidebar, `/api/infer` + try/finally in playground, lineage error/retry, design-system `.btn` classes, `docs/ModelForge-Design-System-handoff.zip` refreshed from v2 handoff. |
-| **2026-05-03** | **n8n:** Host publish port is **`N8N_HOST_PORT`** (default **5678**). If you change it, set matching `N8N_WEBHOOK_URL` / `VITE_N8N_HOST` / `N8N_URL` — do not add a second `ports` entry in compose overrides (Compose merges port lists). |
+| **2026-05-03** | **n8n:** Host publish port is **`N8N_HOST_PORT`** (default **5679**). If you change it, set matching `N8N_WEBHOOK_URL` / `VITE_N8N_HOST` / `N8N_URL` — do not add a second `ports` entry in compose overrides (Compose merges port lists). |
 | **2026-05-03** | **n8n:** Compose default image `n8nio/n8n:latest` via `N8N_IMAGE` (was hard-pinned `1.78.0`). Set `N8N_IMAGE` in `.env` or a service override to pin a semver/digest for production. |
-| **2026-05-03** | **n8n:** Single published host port via `N8N_HOST_PORT` (default 5678); removed override example that merged an extra `ports` entry. |
+| **2026-05-03** | **n8n:** Single published host port via `N8N_HOST_PORT` (default 5679); removed override example that merged an extra `ports` entry. |
 | **2026-05-03** | **n8n:** Auto-import bundled workflows via CLI (`n8n-import-workflows-compose.sh`) after owner bootstrap; workflows bind-mounted at `/import/modelforge-workflows`. Optional idempotent REST sync: `scripts/n8n_import_workflows.py` + `N8N_API_KEY`. |
 | **2026-05-03** | **n8n + Cursor:** `.cursor/mcp.json.example` for instance-level MCP (`validate_workflow`, `get_workflow_details`, etc.); `.cursor/mcp.json` gitignored. |
 | **2026-05-03** | **n8n:** Production-oriented bundle cleanup (strip export noise, descriptions, webhook `allowedOrigins`, HTTP timeouts, `saveManualExecutions: false`); `validate_n8n_workflow_bundle.py` + CI job. |
+| **2026-05-03** | **n8n / MCP:** Host default **5679** everywhere (Compose, examples, frontend fallbacks); instance MCP `initialize` returns **HTTP 200** with valid Bearer + `Accept: application/json, text/event-stream`. |
 
 ---
 

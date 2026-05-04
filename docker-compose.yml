@@ -49,8 +49,9 @@ services:
     container_name: mf-n8n
     ports:
       # Single host binding (Compose merges `ports` across override files — do not add another n8n `ports` entry there).
-      # If host :5678 is busy, set N8N_HOST_PORT in `.env` (e.g. 5679) and match N8N_WEBHOOK_URL / VITE_N8N_HOST.
-      - "${N8N_HOST_PORT:-5678}:5678"
+      # n8n listens on 5678 *inside* the container; default **host** port is 5679 so local :5678 stays free for other stacks.
+      # Override with N8N_HOST_PORT in `.env` and match N8N_WEBHOOK_URL / VITE_N8N_HOST / MCP URL.
+      - "${N8N_HOST_PORT:-5679}:5678"
     environment:
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
@@ -63,7 +64,7 @@ services:
       - N8N_PORT=5678
       - N8N_PROTOCOL=http
       # Must match the host port you publish (see ports:). Override via N8N_WEBHOOK_URL when remapping.
-      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5678/}
+      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5679/}
       - N8N_BASIC_AUTH_ACTIVE=true
       - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
       - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:?N8N_BASIC_AUTH_PASSWORD must be set}

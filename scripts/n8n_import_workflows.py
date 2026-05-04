@@ -34,7 +34,7 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DIR = ROOT / "integrations" / "n8n" / "workflows"
 
-BASE = os.environ.get("N8N_URL", "http://localhost:5678").rstrip("/")
+BASE = os.environ.get("N8N_URL", "http://localhost:5679").rstrip("/")
 API_KEY = os.environ.get("N8N_API_KEY", "").strip()
 BASIC_USER = os.environ.get("N8N_BASIC_AUTH_USER", "admin")
 BASIC_PASS = os.environ.get("N8N_BASIC_AUTH_PASSWORD", "")

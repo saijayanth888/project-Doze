@@ -5,7 +5,7 @@ const ARCH = [
   { id: 'react', label: 'React Dashboard', sub: ':3000', color: '#38bdf8', desc: 'Model Lineage Tree · Training Monitor · Eval Comparisons', x: '50%', y: '5%', w: 220 },
   { id: 'api', label: 'FastAPI Backend', sub: ':8000', color: C.acc, desc: 'REST + WebSocket · /evolve /models /lineage /evaluate', x: '50%', y: '27%', w: 210 },
   { id: 'langgraph', label: 'LangGraph Agent', sub: 'Evolution', color: '#c084fc', desc: 'Evaluate → Identify → Curate → Train → Compare → Decide', x: '22%', y: '54%', w: 200 },
-  { id: 'n8n', label: 'n8n Workflows', sub: ':5678', color: C.warning, desc: 'Scheduling · Triggers · Notifications · Webhooks', x: '50%', y: '54%', w: 180 },
+  { id: 'n8n', label: 'n8n Workflows', sub: ':5679', color: C.warning, desc: 'Scheduling · Triggers · Notifications · Webhooks', x: '50%', y: '54%', w: 180 },
   { id: 'postgres', label: 'PostgreSQL + pgvector', sub: 'lineage DB', color: C.ind, desc: 'Generations · Champions · Embeddings · Training dedup', x: '79%', y: '54%', w: 210 },
   { id: 'ollama', label: 'Ollama', sub: ':11434', color: C.success, desc: 'Dev inference · Self-analysis · Fast local serving', x: '24%', y: '80%', w: 155 },
   { id: 'vllm', label: 'vLLM', sub: ':8001', color: C.acc, desc: 'Batched eval · High-throughput benchmark runs', x: '53%', y: '80%', w: 150 },

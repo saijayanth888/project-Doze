@@ -28,7 +28,7 @@ Official reference: [Accessing n8n MCP server](https://docs.n8n.io/advanced-ai/m
 | Endpoint | URL inside containers |
 | -------- | --------------------- |
 | FastAPI  | `http://api:8000`     |
-| n8n UI   | `http://localhost:5678` (Compose maps host **5678** → container **5678**) |
+| n8n UI (browser) | `http://localhost:5679` by default (`N8N_HOST_PORT` → container **5678**; internal DNS remains `n8n:5678`) |
 
 ## Hard reset (wipe workflows + owner, re-bootstrap)
 
@@ -42,9 +42,9 @@ Use when the editor is stuck, credentials are unknown, or health checks never go
    ./scripts/n8n-reset-and-reseed.sh
    ```
 
-3. Open the UI at `N8N_WEBHOOK_URL` without the trailing path (e.g. `http://localhost:5678`). Complete Basic Auth, then sign in as the owner email.
+3. Open the UI at `N8N_WEBHOOK_URL` without the trailing path (e.g. `http://localhost:5679`). Complete Basic Auth, then sign in as the owner email.
 
-If `docker ps` shows **two** lines like `0.0.0.0:5678->5678` and `0.0.0.0:5679->5678`, your **`docker-compose.override.yml`** likely adds another `ports` entry; Compose merges lists. Remove the extra `ports` block and set **`N8N_HOST_PORT`** (and matching `N8N_WEBHOOK_URL` / `VITE_N8N_HOST`) in `.env` instead.
+If `docker ps` shows **two** host bindings for n8n (e.g. both **5678** and **5679**), your **`docker-compose.override.yml`** likely adds a second `ports` entry; Compose merges lists. Remove the extra `ports` block and use only **`N8N_HOST_PORT`** in `.env`.
 
 ## Prerequisites
 
@@ -55,7 +55,7 @@ If `docker ps` shows **two** lines like `0.0.0.0:5678->5678` and `0.0.0.0:5679->
    | Variable | Purpose |
    | -------- | ------- |
    | `N8N_IMAGE` | Optional. Docker image for the n8n service (Compose default: `n8nio/n8n:latest`). Pin a version for reproducible upgrades. |
-| `N8N_HOST_PORT` | Optional. Host port mapped to n8n’s **5678** in the container (default **5678**). Use this instead of a second `ports:` entry in `docker-compose.override.yml` — Compose **merges** port lists and would publish two host ports. |
+| `N8N_HOST_PORT` | Optional. Host port mapped to n8n’s **5678** in the container (Compose default **5679** so host **5678** stays free). Use this instead of a second `ports:` entry in `docker-compose.override.yml` — Compose **merges** port lists and would publish two host ports. |
    | `N8N_ENCRYPTION_KEY` | **Required.** 32+ random chars (`openssl rand -hex 32`). |
    | `MODELFORGE_API_KEY` | Sent as `X-API-Key` from HTTP Request nodes (`$env.MODELFORGE_API_KEY`). |
    | `N8N_BASIC_AUTH_USER` / `N8N_BASIC_AUTH_PASSWORD` | Reverse-proxy style protection for the editor. |
@@ -114,7 +114,7 @@ The JSON directory is bind-mounted read-only in `docker-compose.yml`. Import is 
 5. **Smoke-test webhook** (replace host if needed):
 
    ```bash
-   curl -sS -X POST "http://localhost:5678/webhook/evolution-events" \
+   curl -sS -X POST "http://localhost:5679/webhook/evolution-events" \
      -H "Content-Type: application/json" \
      -d '{"event_type":"run_complete","run_id":"e2e-smoke","generation_number":0}'
    ```
