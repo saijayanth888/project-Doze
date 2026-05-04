@@ -15,6 +15,12 @@ Use n8n’s **instance-level MCP** so Cursor can call tools such as `search_work
 3. Restart Cursor (or reload MCP) so the server registers.
 4. For each workflow the agent should run or inspect in depth, enable **Available in MCP** (workflow **…** menu → Settings, or the Instance-level MCP workflows table). `search_workflows` can still list previews of others.
 
+### MCP `create_workflow` / `update_workflow` vs bundled JSON
+
+- **`create_workflow_from_code`** and **`update_workflow`** take **Workflow SDK source** (`import { workflow, node, trigger, … } from '@n8n/workflow-sdk'`), not the JSON files under `workflows/`. Use **`get_sdk_reference`** (sections `patterns`, `import`, `guidelines`) and **`validate_workflow`** before saving.
+- **`update_workflow` is rejected** until that workflow has **Available in MCP** turned on in the editor. Otherwise n8n returns: *Workflow is not available in MCP. Enable MCP access in workflow settings.* Workflows you create via **`create_workflow_from_code`** are updatable through MCP immediately.
+- To **push the canonical JSON exports** (nodes, connections, settings) from `integrations/n8n/workflows/` into the instance, use **`python3 scripts/n8n_import_workflows.py`** (REST + `N8N_API_KEY`) or the Docker **`n8n import:workflow`** path — that is the supported “sync repo JSON → n8n” flow. MCP does not replace that for export JSON.
+
 **Security:** If a token was pasted into chat or committed by mistake, rotate it in n8n (generate a new MCP access token) and update `.cursor/mcp.json` only.
 
 Official reference: [Accessing n8n MCP server](https://docs.n8n.io/advanced-ai/mcp/accessing-n8n-mcp-server/) and [MCP tools reference](https://docs.n8n.io/advanced-ai/mcp/mcp_tools_reference/).
