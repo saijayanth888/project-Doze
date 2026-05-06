@@ -59,6 +59,7 @@ const EVENT_TYPES = [
   { key: 'generation_complete', label: 'Generation discarded' },
   { key: 'evolution_complete',  label: 'Evolution complete'   },
   { key: 'evolution_failed',    label: 'Evolution failed'     },
+  { key: 'track_promoted',      label: 'Track promoted'       },
   { key: 'drift_detected',      label: 'Drift detected'       },
   { key: 'daily_report',        label: 'Daily report'         },
   { key: 'health_check',        label: 'Health check (noisy)' },

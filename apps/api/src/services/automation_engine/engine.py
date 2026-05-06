@@ -317,8 +317,10 @@ class AutomationEngine:
         return event_type in allow
 
     async def notify(self, message: str, emoji: str = "🔔", *, event_type: str | None = None) -> None:
-        """Legacy API kept for ``agents/runner.py``. Writes to automation_log
-        and posts to Slack subject to the per-event allow-list."""
+        """Plain-text legacy API kept for ``agents/runner.py`` and the
+        ``notify.slack`` workflow action. Writes to automation_log and posts
+        to Slack subject to the per-event allow-list. For richer Slack
+        Block Kit messages use :meth:`notify_blocks`."""
         try:
             await self.db.record_automation_run(
                 job_id=event_type or "notify", status="info", message=f"{emoji} {message}",
@@ -336,6 +338,40 @@ class AutomationEngine:
                 await client.post(url, json=body)
         except Exception as exc:
             logger.warning("[slack] failed: %s", exc)
+
+    async def notify_blocks(
+        self,
+        text: str,
+        blocks: list[dict],
+        *,
+        event_type: str | None = None,
+        log_message: str | None = None,
+    ) -> None:
+        """Send a Block Kit message to Slack. Falls back to ``notify(text,…)``
+        when no webhook is configured. ``text`` is also used as the Slack
+        notification preview (mobile lock screen, channel sidebar)."""
+        try:
+            await self.db.record_automation_run(
+                job_id=event_type or "notify",
+                status="info",
+                message=log_message or text,
+            )
+        except Exception:
+            pass
+        if not await self._allowed_event(event_type):
+            return
+        url = await self._slack_url()
+        if not url:
+            return
+        body = {"text": text, "blocks": blocks}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(url, json=body)
+                if resp.status_code >= 400:
+                    logger.warning("[slack] blocks post HTTP %s: %s",
+                                   resp.status_code, resp.text[:200])
+        except Exception as exc:
+            logger.warning("[slack] blocks post failed: %s", exc)
 
 
 __all__ = ["AutomationEngine", "DEFAULT_JOBS", "attach_engine", "get_engine"]

@@ -38,17 +38,41 @@ from services.model_registry import ModelRegistry
 
 
 async def _notify_automation(message: str, emoji: str, *, event_type: str | None = None) -> None:
-    """Best-effort fan-out to the in-process automation engine (Slack + log).
+    """Plain-text fan-out to the in-process automation engine.
 
     Wrapped in try/except so a notify failure can never abort an evolution
-    run. The engine is a no-op when not yet attached (e.g. during tests or
-    before APScheduler ships in the image).
+    run. The engine is a no-op when not yet attached.
     """
     try:
         from services.automation import get_engine
         eng = get_engine()
         if eng:
             await eng.notify(message, emoji, event_type=event_type)
+    except Exception:
+        pass
+
+
+async def _notify_blocks(
+    text: str,
+    blocks: list,
+    *,
+    event_type: str | None,
+    log_message: str | None = None,
+) -> None:
+    """Rich Block Kit notification — see :mod:`services.slack_blocks`.
+
+    Falls back to plain ``notify(text)`` when no engine is attached.
+    """
+    try:
+        from services.automation import get_engine
+        eng = get_engine()
+        if not eng:
+            return
+        # Engines that haven't been upgraded yet won't have notify_blocks.
+        if hasattr(eng, "notify_blocks"):
+            await eng.notify_blocks(text, blocks, event_type=event_type, log_message=log_message)
+        else:
+            await eng.notify(text, "🔔", event_type=event_type)
     except Exception:
         pass
 
@@ -145,6 +169,20 @@ async def _maybe_promote_to_tracks(
                 "prev_avg": round(prev_avg, 4) if prev_avg is not None else None,
                 "target_benchmarks": targets,
             })
+            try:
+                from services.slack_blocks import track_promoted as _track_blocks
+                _t_text, _t_blocks = _track_blocks(
+                    track_id=str(track["track_id"]),
+                    track_name=str(track.get("name") or track["track_id"]),
+                    run_id=run_id, generation=int(generation),
+                    new_avg=float(new_avg),
+                    prev_avg=float(prev_avg) if prev_avg is not None else None,
+                    target_benchmarks=list(targets),
+                    full_scores=dict(child_scores),
+                )
+                await _notify_blocks(_t_text, _t_blocks, event_type="track_promoted")
+            except Exception as exc:
+                logger.debug("[track] slack notify failed: %s", exc)
         except Exception as exc:
             logger.warning("[track] update_track_champion(%s) failed: %s",
                            track["track_id"], exc)
@@ -208,11 +246,9 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
         label=f"Run {run_id} started",
         sub=f"training={training.name} · eval={eval_backend.name} · curator={getattr(curator, 'name', '?')} · gpu={prefer_real}",
     )
-    await _notify_automation(
-        f"Evolution started: {config.get('base_model','?')} × {config.get('max_generations','?')} gen — run {run_id}",
-        "🚀",
-        event_type="evolution_started",
-    )
+    from services.slack_blocks import evolution_started as _ev_started_blocks
+    _text, _blocks = _ev_started_blocks(run_id=run_id, config=dict(config or {}))
+    await _notify_blocks(_text, _blocks, event_type="evolution_started")
     _emit_event("evolution.started", {
         "run_id": run_id,
         "base_model": config.get("base_model"),
@@ -378,10 +414,21 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
             scs = s.get("child_scores") or {}
             avg = sum(float(v) for v in scs.values()) / max(1, len(scs))
             promoted = s.get("decision") == "promote"
-            await _notify_automation(
-                f"Gen {s['generation']} {'promoted' if promoted else 'discarded'} — avg {avg:.3f}"
-                + (f" ({s.get('decision_reason')})" if not promoted and s.get('decision_reason') else ""),
-                "🏆" if promoted else "❌",
+            from services.slack_blocks import (
+                generation_discarded as _gen_discarded_blocks,
+                generation_promoted as _gen_promoted_blocks,
+            )
+            _builder = _gen_promoted_blocks if promoted else _gen_discarded_blocks
+            _text, _blocks = _builder(
+                run_id=run_id,
+                generation=int(s["generation"]),
+                child_scores=dict(s.get("child_scores") or {}),
+                parent_scores=dict(s.get("parent_scores") or {}),
+                decision_reason=s.get("decision_reason"),
+                duration_seconds=dur if dur else None,
+            )
+            await _notify_blocks(
+                _text, _blocks,
                 event_type="champion_promoted" if promoted else "generation_complete",
             )
             # Domain events for workflow triggers.
@@ -447,12 +494,19 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     "base_model": base_model,
                 },
             )
-            await _notify_automation(
-                f"Run complete — champion avg {float(final.get('champion_avg', 0.0)):.3f} "
-                f"after {int(final.get('generation', 0) or 0)} generation(s)",
-                "✅",
-                event_type="evolution_complete",
+            from services.slack_blocks import evolution_completed as _ev_done_blocks
+            _completed_text, _completed_blocks = _ev_done_blocks(
+                run_id=run_id,
+                final_scores=dict(final.get("child_scores") or {}),
+                generations=int(final.get("generation", 0) or 0),
+                base_model=base_model,
+                duration_seconds=(
+                    float(final.get("training_seconds", 0.0) or 0.0)
+                    + float(final.get("eval_seconds", 0.0) or 0.0)
+                ),
+                champion_avg=float(final.get("champion_avg", 0.0)),
             )
+            await _notify_blocks(_completed_text, _completed_blocks, event_type="evolution_complete")
             _emit_event("evolution.completed", {
                 "run_id": run_id,
                 "champion_avg": float(final.get("champion_avg", 0.0)),
@@ -481,11 +535,14 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
             sub=str(exc)[:300],
         )
         logger.exception("[evolution %s] failed", run_id)
-        await _notify_automation(
-            f"Run {run_id} failed: {type(exc).__name__}: {str(exc)[:200]}",
-            "🔴",
-            event_type="evolution_failed",
+        from services.slack_blocks import evolution_failed as _ev_fail_blocks
+        _fail_text, _fail_blocks = _ev_fail_blocks(
+            run_id=run_id,
+            generation=int(state.get("generation", 0)),
+            error_type=type(exc).__name__,
+            error=str(exc),
         )
+        await _notify_blocks(_fail_text, _fail_blocks, event_type="evolution_failed")
         _emit_event("evolution.failed", {
             "run_id": run_id,
             "error_type": type(exc).__name__,
