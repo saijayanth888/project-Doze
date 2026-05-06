@@ -166,6 +166,7 @@ async def list_adapters(
                     champion_id is not None and champion_id == aid
                 )
 
+                has_weights = (gen_dir / "adapter_config.json").is_file()
                 adapters.append(
                     AdapterInfo(
                         adapter_id=aid,
@@ -182,6 +183,7 @@ async def list_adapters(
                         adapter_path=str(gen_dir),
                         archived=bool(row and row.get("archived")),
                         status=_adapter_status(row, is_champion),
+                        has_weights=has_weights,
                     )
                 )
 
@@ -453,13 +455,24 @@ async def serve_adapter(
     root = adapter_dir_abs(run_id, gen, settings.resolve_data_root())
     if not root.is_dir():
         raise HTTPException(status_code=404, detail="Adapter not found")
+    if not (root / "adapter_config.json").is_file():
+        # Empty stub from a failed run — refusing prevents the registry from
+        # being overwritten with a champion that can never serve inference.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Adapter {adapter_id} has no weights on disk "
+                "(adapter_config.json missing — the run likely errored before "
+                "saving). Pick a different adapter."
+            ),
+        )
 
     row = await db.get_generation(run_id, gen)
     run_meta = await db.get_run(run_id)
     base_model = str((run_meta or {}).get("base_model") or "llama3.2:3b")
 
     alias_name = adapter_alias(adapter_id)
-    ok, msg = await try_create_ollama_model(
+    ok, msg, reason = await try_create_ollama_model(
         base_model=base_model,
         adapter_abs_path=root,
         alias=alias_name,
@@ -519,10 +532,20 @@ async def serve_adapter(
             "vllm_lora_path": str(root.resolve()),
         }
     )
+    # Friendlier message for the common (and currently unavoidable) PEFT case.
+    if reason == "format_mismatch":
+        message = (
+            "Ollama can't load PEFT/safetensors LoRA adapters; convert to GGUF "
+            "(llama.cpp/convert_lora_to_gguf.py) or run inference via vLLM."
+        )
+    else:
+        message = f"Ollama create failed ({msg}); registry updated with vLLM hint"
+
     return ServeAdapterResponse(
         adapter_id=adapter_id,
         mode="vllm_hint",
         ollama_model=None,
-        message=f"Ollama create failed ({msg}); registry updated with vLLM hint",
+        message=message,
         vllm_lora_path=str(root.resolve()),
+        reason=reason,
     )

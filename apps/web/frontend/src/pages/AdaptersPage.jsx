@@ -315,7 +315,29 @@ export default function AdaptersPage() {
                     {isChamp ? <Crown size={12} style={{ marginRight: 6, verticalAlign: -1 }} /> : null}
                     {row.generation}
                   </td>
-                  <td style={{ padding: 12, fontFamily: F.mono, color: isChamp ? C.txtP : C.txtS }}>{row.run_id}</td>
+                  <td style={{ padding: 12, fontFamily: F.mono, color: isChamp ? C.txtP : C.txtS }}>
+                    {row.run_id}
+                    {row.has_weights === false ? (
+                      <span
+                        title="adapter_config.json missing — run failed before saving weights. This adapter cannot be served."
+                        style={{
+                          marginLeft: 8,
+                          padding: '1px 6px',
+                          fontSize: 9,
+                          fontFamily: F.ui,
+                          color: C.danger,
+                          background: 'rgba(239,68,68,0.10)',
+                          border: `1px solid ${C.danger}55`,
+                          borderRadius: 999,
+                          letterSpacing: '0.04em',
+                          textTransform: 'uppercase',
+                          cursor: 'help',
+                        }}
+                      >
+                        no weights
+                      </span>
+                    ) : null}
+                  </td>
                   <td style={{ padding: 12, color: C.acc, fontFamily: F.mono, fontWeight: isChamp ? 600 : 400 }}>{avgScore(row.scores)}</td>
                   <td style={{ padding: 12, fontFamily: F.mono, color: C.txtM }}>{Number(row.size_mb || 0).toFixed(1)}</td>
                   <td style={{ padding: 12 }}>

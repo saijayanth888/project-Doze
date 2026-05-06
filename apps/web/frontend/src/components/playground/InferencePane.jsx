@@ -185,6 +185,9 @@ export default function InferencePane() {
   const [championBase, setChampionBase] = useState('');
   /** Last error from a failed Run Inference, surfaced verbatim with a self-heal button. */
   const [submitError, setSubmitError] = useState(null);
+  /** What the most recent serve attempt told us about the adapter. Drives the
+   * "champion pane is actually running the base model" banner. */
+  const [serveStatus, setServeStatus] = useState(null);
   const textareaRef = useRef(null);
 
   useEffect(() => {
@@ -241,9 +244,17 @@ export default function InferencePane() {
       try {
         const a = await fetchAdapters().catch(() => null);
         if (cancelled || !a) return;
-        const list = a.adapters || [];
+        // Hide adapter dirs that don't actually contain weights — they're stubs
+        // from runs that errored before the SFTTrainer saved a checkpoint.
+        // Picking one would 404 the inference endpoint with no useful signal.
+        const list = (a.adapters || []).filter((x) => x.has_weights !== false);
         setAdapters(list);
-        const cid = a.champion_id || list.find((x) => x.is_champion)?.adapter_id;
+        // Prefer an adapter the user can actually run: registered champion
+        // first, then the first row with weights.
+        let cid = a.champion_id;
+        if (!list.some((x) => x.adapter_id === cid)) {
+          cid = list.find((x) => x.is_champion)?.adapter_id || list[0]?.adapter_id || '';
+        }
         if (cid) {
           setAdapterId(cid);
           setBadge(cid);
@@ -309,17 +320,57 @@ export default function InferencePane() {
 
       const baseModel = ollamaBaseTagFromRegistryBase(championBase);
 
+      let useAdapterPath = false;
       if (targetId) {
         const served = await serveAdapter(targetId);
         const sel = adapters.find((x) => x.adapter_id === targetId);
-        // Ollama can only serve local tags. If the adapter has not been served as
-        // an Ollama model, fall back to the resolved base tag so the champion pane
-        // doesn't trip into the mock branch with an HF repo id like
-        // `meta-llama/Llama-3.2-3B-Instruct`.
         modelBTag = served?.ollama_model
           || ollamaBaseTagFromRegistryBase(sel?.base_model)
           || baseModel;
         setBadge(targetId);
+        setServeStatus({
+          adapterId: targetId,
+          mode: served?.mode || 'unknown',
+          reason: served?.reason || null,
+          message: served?.message || null,
+          ollamaModel: served?.ollama_model || null,
+        });
+        // When Ollama can't load the adapter (PEFT/safetensors), route through
+        // the API's in-process transformers+PEFT path so the champion pane
+        // actually runs the adapter instead of silently mirroring the base.
+        useAdapterPath = served?.mode !== 'ollama';
+      } else {
+        setServeStatus(null);
+      }
+
+      if (useAdapterPath && targetId) {
+        const result = await apiFetch(
+          '/api/infer/adapter/compare',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              prompt,
+              adapter_id: targetId,
+              max_tokens: 256,
+              temperature: 0.7,
+            }),
+          },
+          // PEFT inference cold-starts a 1-3GB model on first call; give it
+          // generous headroom. Subsequent calls hit the in-process cache.
+          { timeoutMs: 600_000 },
+        );
+        if (result?.base && result?.champion) {
+          setResponses({ base: result.base.response ?? '', champion: result.champion.response ?? '' });
+          setMeta({ base: result.base, champion: result.champion });
+          // Mark the comparison as actually-distinct so the disclosure banner
+          // disappears — both panes ran on the API GPU through transformers,
+          // with PEFT applied only to the champion side.
+          setServeStatus((prev) => prev ? { ...prev, mode: 'peft', adapterApplied: true } : prev);
+        } else {
+          setResponses({ base: 'No response.', champion: 'No response.' });
+        }
+        setSubmitted(true);
+        return;
       }
 
       const result = await apiFetch(
@@ -633,6 +684,43 @@ export default function InferencePane() {
               Clear stored key & retry
             </button>
           ) : null}
+        </div>
+      ) : null}
+
+      {submitted && !loading && serveStatus && serveStatus.mode !== 'ollama' && serveStatus.mode !== 'peft' ? (
+        <div
+          role="note"
+          style={{
+            display: 'flex',
+            gap: 12,
+            alignItems: 'flex-start',
+            padding: '10px 14px',
+            background: 'rgba(245,158,11,0.08)',
+            border: '1px solid rgba(245,158,11,0.35)',
+            borderRadius: 8,
+            color: '#fbbf24',
+            fontFamily: F.ui,
+            fontSize: 12,
+            lineHeight: 1.55,
+          }}
+        >
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+              Both panes are running the same base model — adapter inference isn't wired yet.
+            </div>
+            <div style={{ color: C.txtS }}>
+              {serveStatus.reason === 'format_mismatch'
+                ? 'The adapter was trained with PEFT (adapter_model.safetensors). Ollama only serves GGUF LoRAs — convert with llama.cpp\'s convert_lora_to_gguf.py and re-serve, or run inference through vLLM (which supports PEFT directly via lora_request).'
+                : serveStatus.reason === 'ollama_unreachable'
+                  ? 'Ollama is unreachable from the API container. Check OLLAMA_HOST and that the service is running.'
+                  : serveStatus.message || 'serve returned mode=' + serveStatus.mode + '. Champion pane is showing the base model.'}
+            </div>
+            <div style={{ marginTop: 6, fontFamily: F.mono, fontSize: 11, color: C.txtM }}>
+              adapter: <span style={{ color: '#fbbf24' }}>{serveStatus.adapterId}</span>
+              {' · '}mode: <span style={{ color: '#fbbf24' }}>{serveStatus.mode}</span>
+              {serveStatus.reason ? <> · reason: <span style={{ color: '#fbbf24' }}>{serveStatus.reason}</span></> : null}
+            </div>
+          </div>
         </div>
       ) : null}
 

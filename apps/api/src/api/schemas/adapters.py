@@ -23,6 +23,11 @@ class AdapterInfo(BaseModel):
     adapter_path: str | None = None
     archived: bool = False
     status: str = Field(description="champion|promoted|discarded|archived")
+    # True iff `adapter_config.json` is present on disk. Failed/aborted runs
+    # leave empty stub directories, and surfacing that to the UI lets the
+    # Playground hide them from the dropdown so the user doesn't pick one
+    # that's guaranteed to fail.
+    has_weights: bool = False
 
 
 class AdapterList(BaseModel):
@@ -45,6 +50,12 @@ class ServeAdapterResponse(BaseModel):
     ollama_model: str | None = None
     message: str
     vllm_lora_path: str | None = None
+    # Stable identifier so the frontend can show a tailored explanation when
+    # Ollama could not load the adapter. None when mode == "ollama".
+    reason: str | None = Field(
+        default=None,
+        description="format_mismatch | ollama_error | ollama_unreachable | None",
+    )
 
 
 class AdapterCompareInference(BaseModel):
