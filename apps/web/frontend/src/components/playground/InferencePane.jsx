@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 
 const INFERENCE_STORAGE_KEY = 'mf.playground.inference.v1';
 import { RotateCcw, Zap, Trophy, Save } from 'lucide-react';
-import { apiFetch, fetchAdapters, fetchDatasets, savePairToDataset, serveAdapter } from '../../config/api';
+import { apiFetch, fetchAdapters, fetchDatasets, getApiKey, savePairToDataset, serveAdapter, setApiKey } from '../../config/api';
 import { C, F } from '../../config/colors';
 import DNALoader from '../shared/DNALoader';
 import MagneticButton from '../shared/MagneticButton';
@@ -61,6 +61,8 @@ export default function InferencePane() {
   const [badge, setBadge] = useState('');
   /** Ollama tag for the promoted champion (from `/api/models/champion`). */
   const [championBase, setChampionBase] = useState('');
+  /** Last error from a failed Run Inference, surfaced verbatim with a self-heal button. */
+  const [submitError, setSubmitError] = useState(null);
   const textareaRef = useRef(null);
 
   useEffect(() => {
@@ -155,6 +157,7 @@ export default function InferencePane() {
     if (!prompt.trim() || loading) return;
     setLoading(true);
     setSubmitted(false);
+    setSubmitError(null);
     setResponses({ base: '', champion: '' });
     setMeta({ base: null, champion: null });
     try {
@@ -210,15 +213,35 @@ export default function InferencePane() {
         });
       }
       setSubmitted(true);
-    } catch {
+    } catch (err) {
+      // Surface the *real* failure (status code + body) so the user can act on it.
+      // The previous generic "Request failed. Check API key…" hid 401s caused by
+      // a stale custom key in localStorage that overrode the working build-time key.
+      const status = err?.status;
+      const detail = err?.body?.detail || err?.message || 'Unknown error';
+      const detailStr = typeof detail === 'string' ? detail : JSON.stringify(detail);
+      const reason =
+        status === 401 || status === 403
+          ? `Auth failed (HTTP ${status}). Your saved API key looks wrong — clear it below to use the build-in key.`
+          : status
+            ? `HTTP ${status}: ${detailStr}`
+            : detailStr;
       setResponses({
-        base: 'Request failed. Check API key and that Ollama is running.',
-        champion: 'Request failed. Check API key and that Ollama is running.',
+        base: `Request failed. ${reason}`,
+        champion: `Request failed. ${reason}`,
       });
+      setSubmitError({ status, reason, isAuth: status === 401 || status === 403 });
       setSubmitted(true);
     } finally {
       setLoading(false);
     }
+  }
+
+  function clearStoredApiKey() {
+    setApiKey('');
+    setSubmitError(null);
+    // Force a fresh attempt with the (build-time) default key.
+    setTimeout(() => handleSubmit(), 0);
   }
 
   async function handleSavePair(which) {
@@ -413,6 +436,62 @@ export default function InferencePane() {
           </div>
         </div>
       </div>
+
+      {submitError && !loading ? (
+        <div
+          role="alert"
+          style={{
+            display: 'flex',
+            gap: 12,
+            alignItems: 'flex-start',
+            padding: '10px 14px',
+            background: 'rgba(239,68,68,0.08)',
+            border: `1px solid rgba(239,68,68,0.35)`,
+            borderRadius: 8,
+            color: C.danger,
+            fontFamily: F.ui,
+            fontSize: 12,
+            lineHeight: 1.5,
+          }}
+        >
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600, marginBottom: 2 }}>Inference failed</div>
+            <div style={{ color: C.txtS }}>{submitError.reason}</div>
+            {submitError.isAuth ? (
+              <div style={{ color: C.txtM, marginTop: 6, fontFamily: F.mono, fontSize: 11 }}>
+                Stored key (localStorage <code>modelforge_api_key</code>):{' '}
+                <code>
+                  {(() => {
+                    const k = (typeof window !== 'undefined'
+                      && window.localStorage.getItem('modelforge_api_key')) || '';
+                    return k ? `${k.slice(0, 6)}…${k.slice(-4)}` : '(none)';
+                  })()}
+                </code>
+              </div>
+            ) : null}
+          </div>
+          {submitError.isAuth ? (
+            <button
+              type="button"
+              onClick={clearStoredApiKey}
+              style={{
+                padding: '6px 10px',
+                background: C.danger,
+                color: '#fff',
+                border: 'none',
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontFamily: F.ui,
+                fontSize: 11,
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Clear stored key & retry
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {(submitted || loading) && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, flex: 1 }}>
