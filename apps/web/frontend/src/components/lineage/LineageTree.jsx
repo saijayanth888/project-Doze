@@ -2,10 +2,14 @@ import { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { C, F } from '../../config/colors';
 import LineageNode from './LineageNode';
 
-const W = 120;
-const H = 110;
-const COLS = 5;
-const PAD = 70;
+// Generation-based layout: each generation is its own column flowing left → right,
+// siblings within a generation stack vertically and stay centered around y=0.
+// Without this, a single champion node was rendering tucked into a corner of a
+// fixed-aspect viewBox and the canvas felt empty.
+const COL_W = 240;   // horizontal distance between consecutive generations
+const ROW_H = 140;   // vertical distance between siblings of the same generation
+const PAD_X = 160;   // horizontal breathing room added to the viewBox
+const PAD_Y = 140;   // vertical breathing room added to the viewBox
 
 function normalizeApiNode(n) {
   const scores = n.scores || n.childScores || {};
@@ -21,26 +25,42 @@ function normalizeApiNode(n) {
 
 function layoutApiNodes(apiNodes) {
   const sorted = [...apiNodes].map(normalizeApiNode).sort((a, b) => a.generation - b.generation);
-  return sorted.map((node, i) => {
-    const col = i % COLS;
-    const row = Math.floor(i / COLS);
-    return {
-      ...node,
-      x: PAD + col * W,
-      y: PAD + row * H,
-    };
-  });
+  const byGen = new Map();
+  for (const n of sorted) {
+    const g = Number(n.generation ?? 0);
+    if (!byGen.has(g)) byGen.set(g, []);
+    byGen.get(g).push(n);
+  }
+  const gens = [...byGen.keys()].sort((a, b) => a - b);
+  const minGen = gens[0] ?? 0;
+  const out = [];
+  for (const g of gens) {
+    const siblings = byGen.get(g);
+    siblings.forEach((node, i) => {
+      const yOffset = (i - (siblings.length - 1) / 2) * ROW_H;
+      out.push({
+        ...node,
+        x: (g - minGen) * COL_W,
+        y: yOffset,
+      });
+    });
+  }
+  return out;
 }
 
 function bounds(layoutNodes) {
-  if (!layoutNodes.length) return { minX: 0, minY: 0, vbW: 400, vbH: 300 };
+  if (!layoutNodes.length) return { minX: 0, minY: 0, vbW: 800, vbH: 480 };
   const xs = layoutNodes.map(n => n.x);
   const ys = layoutNodes.map(n => n.y);
-  const minX = Math.min(...xs) - PAD;
-  const maxX = Math.max(...xs) + PAD;
-  const minY = Math.min(...ys) - PAD;
-  const maxY = Math.max(...ys) + PAD;
-  return { minX, minY, vbW: Math.max(320, maxX - minX), vbH: Math.max(280, maxY - minY) };
+  const minX = Math.min(...xs) - PAD_X;
+  const maxX = Math.max(...xs) + PAD_X;
+  const minY = Math.min(...ys) - PAD_Y;
+  const maxY = Math.max(...ys) + PAD_Y;
+  // Maintain a wide aspect ratio so a single node still fills the canvas instead
+  // of leaving most of the available pane empty.
+  const vbW = Math.max(800, maxX - minX);
+  const vbH = Math.max(480, maxY - minY);
+  return { minX, minY, vbW, vbH };
 }
 
 export default function LineageTree({
@@ -70,18 +90,39 @@ export default function LineageTree({
         })
         .filter(Boolean);
     } else if (layoutedNodes.length > 1) {
-      lines = layoutedNodes.map((node, i) => {
-        if (i === 0) return null;
-        const parent = layoutedNodes[i - 1];
-        return {
-          key: `edge-${i}`,
-          x1: parent.x,
-          y1: parent.y,
-          x2: node.x,
-          y2: node.y,
-          promoted: node.promoted,
-        };
-      }).filter(Boolean);
+      // Prefer real parent links when the API didn't provide explicit edges;
+      // fall back to "previous-generation chain" so even a flat list still draws
+      // something meaningful instead of an arbitrary linear chain.
+      lines = layoutedNodes
+        .map((node) => {
+          const parent = node.parentId ? byId[node.parentId] : null;
+          if (parent) {
+            return {
+              key: `${parent.id}-${node.id}`,
+              x1: parent.x,
+              y1: parent.y,
+              x2: node.x,
+              y2: node.y,
+              promoted: node.promoted,
+            };
+          }
+          // Fallback: connect to nearest earlier generation so the chain still draws.
+          const earlier = layoutedNodes.filter((n) => n.generation < node.generation);
+          if (!earlier.length) return null;
+          const closest = earlier.reduce((best, n) =>
+            n.generation > (best?.generation ?? -Infinity) ? n : best
+          , null);
+          if (!closest) return null;
+          return {
+            key: `${closest.id || closest.generation}-${node.id || node.generation}`,
+            x1: closest.x,
+            y1: closest.y,
+            x2: node.x,
+            y2: node.y,
+            promoted: node.promoted,
+          };
+        })
+        .filter(Boolean);
     }
 
     const b = bounds(layoutedNodes);

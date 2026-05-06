@@ -58,6 +58,23 @@ def _row_to_generation_info(row: dict[str, Any]) -> GenerationInfo:
     )
 
 
+def _coerce_score_dict(raw: object) -> dict[str, float]:
+    """JSONB columns can come back as already-decoded dicts or as raw JSON strings
+    depending on whether asyncpg has the json codec registered. Accept both."""
+    import json
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
 def _build_lineage_tree(generations: list[dict]) -> LineageTree:
     """Convert a flat list of generation rows into a LineageTree."""
     nodes: list[LineageNodeSchema] = []
@@ -75,8 +92,11 @@ def _build_lineage_tree(generations: list[dict]) -> LineageTree:
         node_id = f"{run_id}-gen-{gen_num}" if run_id != "unknown" else f"gen-{gen_num}"
 
         promoted: bool = bool(gen.get("promoted", False))
-        scores: dict = gen.get("scores", gen.get("child_scores", {}))
-        avg_score = sum(scores.values()) / len(scores) if scores else 0.0
+        scores: dict = _coerce_score_dict(
+            gen.get("scores") or gen.get("child_scores") or {}
+        )
+        score_vals = [v for v in scores.values() if isinstance(v, (int, float))]
+        avg_score = sum(score_vals) / len(score_vals) if score_vals else 0.0
         method: str | None = gen.get("method")
         decision_reason: str | None = gen.get("decision_reason")
 

@@ -144,6 +144,9 @@ services:
       HUGGINGFACE_HUB_CACHE: /app/data/.cache/huggingface/hub
       TRANSFORMERS_CACHE: /app/data/.cache/huggingface/hub
       HF_DATASETS_CACHE: /app/data/.cache/huggingface/datasets
+      # `expandable_segments` lets the CUDA allocator reuse fragmented blocks instead of
+      # crashing the next training run with OOM after a failure has poisoned the pool.
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
     expose:
       - "8000"
     ports:

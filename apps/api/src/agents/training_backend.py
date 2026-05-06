@@ -89,6 +89,25 @@ class LoRATrainingBackend:
         )
 
     def _train_sync(self, run_id: str, generation: int, config: dict) -> TrainingResult:
+        try:
+            return self._train_sync_inner(run_id, generation, config)
+        finally:
+            # Always release CUDA allocator state so a failed run does not poison the next one.
+            # Without this, a long-running API process accumulates "fragmented" allocations and
+            # eventually OOMs on a checkpoint that would otherwise fit (especially on shared
+            # unified-memory hardware like DGX Spark).
+            import gc
+            gc.collect()
+            try:
+                import torch as _torch  # local import: torch may not even be importable here
+                if _torch.cuda.is_available():
+                    _torch.cuda.empty_cache()
+                    if hasattr(_torch.cuda, "ipc_collect"):
+                        _torch.cuda.ipc_collect()
+            except Exception as exc:
+                logger.debug("[lora-train] cuda cleanup skipped: %s", exc)
+
+    def _train_sync_inner(self, run_id: str, generation: int, config: dict) -> TrainingResult:
         import redis
         import torch
         from datasets import load_dataset
@@ -97,9 +116,8 @@ class LoRATrainingBackend:
             AutoModelForCausalLM,
             AutoTokenizer,
             TrainerCallback,
-            TrainingArguments,
         )
-        from trl import SFTTrainer
+        from trl import SFTConfig, SFTTrainer
 
         class _RedisMetricsCallback(TrainerCallback):
             def __init__(self, rid: str) -> None:
@@ -179,7 +197,11 @@ class LoRATrainingBackend:
         dataset = raw.map(lambda ex: {"text": self._format_sample(ex)})
 
         bf16 = bool(torch.cuda.is_available() and getattr(torch.cuda, "is_bf16_supported", lambda: False)())
-        args = TrainingArguments(
+        # trl >= 0.12 moved dataset_text_field / max_seq_length onto SFTConfig
+        # (which subclasses transformers.TrainingArguments). Older
+        # `SFTTrainer(..., dataset_text_field=..., max_seq_length=...)` calls now
+        # raise TypeError.
+        args = SFTConfig(
             output_dir=output_dir,
             num_train_epochs=float(config.get("num_epochs", 1)),
             per_device_train_batch_size=int(config.get("batch_size", 2)),
@@ -190,6 +212,9 @@ class LoRATrainingBackend:
             logging_steps=10,
             save_strategy="no",
             report_to=[],
+            dataset_text_field="text",
+            # trl >= 1.x renamed `max_seq_length` to `max_length` on SFTConfig.
+            max_length=int(config.get("max_seq_length") or config.get("max_length") or 512),
         )
 
         trainer = SFTTrainer(
@@ -197,8 +222,6 @@ class LoRATrainingBackend:
             processing_class=tokenizer,
             args=args,
             train_dataset=dataset,
-            dataset_text_field="text",
-            max_seq_length=int(config.get("max_seq_length", 512)),
             callbacks=[_RedisMetricsCallback(run_id)],
         )
         trainer.train()

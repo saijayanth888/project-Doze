@@ -39,12 +39,16 @@ class DataCuratorBackend(Protocol):
     ) -> CurationResult: ...
 
 
-WEAKNESS_DATASETS: dict[str, list[tuple[str, str | None, int]]] = {
-    "mmlu": [("cais/mmlu", "all", 2000)],
-    "arc_challenge": [("allenai/ai2_arc", "ARC-Challenge", 1500)],
-    "hellaswag": [("Rowan/hellaswag", None, 1500)],
-    "gsm8k": [("openai/gsm8k", "main", 2000)],
-    "humaneval": [("bigcode/humanevalpack", "python", 1000)],
+# (dataset_name, dataset_config, split, suggested_n)
+# `cais/mmlu` has no `train` split — the bulk pretraining-style data lives in `auxiliary_train`.
+# `bigcode/humanevalpack` ships only a `test` split (HumanEval is a benchmark, not training data;
+# we use it as instruction-tuning seed for code).
+WEAKNESS_DATASETS: dict[str, list[tuple[str, str | None, str, int]]] = {
+    "mmlu": [("cais/mmlu", "all", "auxiliary_train", 2000)],
+    "arc_challenge": [("allenai/ai2_arc", "ARC-Challenge", "train", 1500)],
+    "hellaswag": [("Rowan/hellaswag", None, "train", 1500)],
+    "gsm8k": [("openai/gsm8k", "main", "train", 2000)],
+    "humaneval": [("bigcode/humanevalpack", "python", "test", 1000)],
 }
 
 
@@ -170,12 +174,16 @@ class HuggingFaceDataCurator:
 
         per_cat_budget = max(1, int(max_samples / max(1, len(categories))))
         for category in categories:
-            for ds_name, ds_config, suggested_n in WEAKNESS_DATASETS.get(category, []):
+            for ds_name, ds_config, split_name, suggested_n in WEAKNESS_DATASETS.get(category, []):
                 take_n = min(per_cat_budget, suggested_n)
+                split_spec = f"{split_name}[:{take_n}]"
                 try:
-                    ds = load_dataset(ds_name, ds_config, split=f"train[:{take_n}]")
+                    ds = load_dataset(ds_name, ds_config, split=split_spec)
                 except Exception as exc:
-                    logger.warning("[curator] failed to load %s/%s: %s", ds_name, ds_config, exc)
+                    logger.warning(
+                        "[curator] failed to load %s/%s split=%s: %s",
+                        ds_name, ds_config, split_spec, exc,
+                    )
                     continue
 
                 for ex in ds:

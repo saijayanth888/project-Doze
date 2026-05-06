@@ -85,13 +85,31 @@ def _canonical_benchmark_key(key: str) -> str | None:
 def _normalize_trend_row(t: Any) -> Any:
     if not isinstance(t, dict):
         return t
-    bm = t.get("benchmark")
-    if bm is None:
-        return t
-    canon = _canonical_benchmark_key(str(bm))
-    if canon:
-        return {**t, "benchmark": canon}
-    return t
+    out = dict(t)
+
+    # Postgres `benchmark_scores` rows only persist `score` per (run, gen, benchmark).
+    # The API surface (`ScoreTrend`) wants {parent_score, child_score, delta} so the
+    # frontend can render parent vs child deltas. Derive them here when only `score`
+    # is present so the read path doesn't 500 the moment evolution writes its first row.
+    if "child_score" not in out and "score" in out:
+        try:
+            out["child_score"] = float(out["score"])
+        except (TypeError, ValueError):
+            out["child_score"] = 0.0
+    if "parent_score" not in out:
+        out["parent_score"] = 0.0
+    if "delta" not in out:
+        try:
+            out["delta"] = float(out.get("child_score", 0.0)) - float(out.get("parent_score", 0.0))
+        except (TypeError, ValueError):
+            out["delta"] = 0.0
+
+    bm = out.get("benchmark")
+    if bm is not None:
+        canon = _canonical_benchmark_key(str(bm))
+        if canon:
+            out["benchmark"] = canon
+    return out
 
 
 def _weighted_avg(scores: dict[str, float]) -> float:

@@ -713,29 +713,75 @@ export default function EvolutionStatus() {
                 </LineChart>
               </ResponsiveContainer>
             </div>
-          ) : (
-            <div
-              style={{
-                marginBottom: 16,
-                height: 160,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexDirection: 'column',
-                gap: 10,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.txtM, fontFamily: F.ui, fontSize: 13 }}>
-                <LiveDot color={C.ind} />
-                Training in progress…
-              </div>
-              {tokensPerSec != null ? (
-                <div style={{ fontFamily: F.mono, color: C.acc, fontSize: 12 }}>{tokensPerSec.toFixed(0)} tok/s</div>
-              ) : (
-                <div style={{ fontFamily: F.ui, color: C.txtM, fontSize: 12, opacity: 0.9 }}>Connecting to live metrics…</div>
-              )}
-            </div>
-          )
+          ) : (() => {
+              // Better-than-spinner placeholder while we wait for the SFTTrainer
+              // callback to publish its first loss to redis. The phase comes from
+              // the orchestrator status so users see *what* is actually happening
+              // (model download, curation, eval) instead of "Connecting…" forever.
+              const stepKey = (status.current_step || '').toLowerCase();
+              const phase = (() => {
+                if (stepKey.includes('init')) return { label: 'Initialising run…', sub: 'Booting LangGraph orchestrator' };
+                if (stepKey.includes('identify')) return { label: 'Identifying weaknesses…', sub: 'Reading champion benchmark gaps' };
+                if (stepKey.includes('generate_training') || stepKey.includes('curate'))
+                  return { label: 'Curating training data…', sub: 'Pulling targeted samples from HuggingFace' };
+                if (stepKey.includes('train'))
+                  return { label: 'Training LoRA adapter…', sub: 'Streaming `train_loss` from SFTTrainer' };
+                if (stepKey.includes('evaluate') || stepKey.includes('compare'))
+                  return { label: 'Evaluating across benchmarks…', sub: 'lm-eval mmlu · arc · hellaswag · gsm8k · humaneval' };
+                if (stepKey.includes('promote') || stepKey.includes('decide') || stepKey.includes('record'))
+                  return { label: 'Promoting / recording…', sub: 'Writing generation to Postgres' };
+                return { label: 'Working…', sub: 'Run is healthy — first metric incoming' };
+              })();
+              const elapsedMin = Math.floor(elapsedDisplaySeconds / 60);
+              const elapsedSec = elapsedDisplaySeconds % 60;
+              return (
+                <div style={{ marginBottom: 16, padding: '14px 4px' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      marginBottom: 10,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <LiveDot color={C.ind} />
+                      <span style={{ fontFamily: F.ui, fontSize: 13, color: C.txtP, fontWeight: 600 }}>
+                        {phase.label}
+                      </span>
+                    </div>
+                    <span style={{ fontFamily: F.mono, fontSize: 11, color: C.txtM }}>
+                      {String(elapsedMin).padStart(2, '0')}:{String(elapsedSec).padStart(2, '0')}
+                      {tokensPerSec != null ? ` · ${tokensPerSec.toFixed(0)} tok/s` : ''}
+                    </span>
+                  </div>
+                  <div style={{ fontFamily: F.ui, fontSize: 11, color: C.txtM, marginBottom: 12 }}>
+                    {phase.sub}
+                  </div>
+                  {/* Indeterminate striped progress bar — gives the user something to watch
+                      while we wait for the first concrete metric (loss / score) to arrive. */}
+                  <div
+                    style={{
+                      position: 'relative',
+                      height: 6,
+                      borderRadius: 3,
+                      overflow: 'hidden',
+                      background: 'rgba(129,140,248,0.10)',
+                      border: `1px solid ${C.border}`,
+                    }}
+                  >
+                    <div
+                      style={{
+                        position: 'absolute',
+                        inset: 0,
+                        backgroundImage: `repeating-linear-gradient(45deg, ${C.ind}55 0 8px, transparent 8px 16px)`,
+                        animation: 'mf-bar-stripes 1.4s linear infinite',
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })()
         ) : null}
 
         <div style={{ display: 'flex', gap: 0, marginBottom: 16, position: 'relative' }}>
