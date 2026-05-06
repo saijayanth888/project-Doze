@@ -145,6 +145,10 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     "decision_reason": s.get("decision_reason"),
                     "method": s.get("method"),
                     "training_data_size": s.get("training_data_size", 0),
+                    # Persist the full run config so AdaptersPage can show
+                    # training hyperparameters (lora_rank/alpha/lr/batch/base) in
+                    # its detail pane. The route already reads `data.config`.
+                    "config": dict(config or {}),
                     "duration_seconds": (
                         s.get("training_seconds", 0.0) + s.get("eval_seconds", 0.0)
                     ),
