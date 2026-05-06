@@ -92,9 +92,9 @@ test.describe("Dashboard UI interactions", () => {
     await expect(dialog).toBeHidden({ timeout: 10_000 });
   });
 
-  test("View Logs scrolls to activity feed section", async ({ page }) => {
+  test("View activity scrolls to activity feed section", async ({ page }) => {
     await page.goto("/dashboard");
-    const logsBtn = page.getByRole("button", { name: /View Logs/i }).first();
+    const logsBtn = page.getByRole("button", { name: /View activity/i }).first();
     await expect(logsBtn).toBeVisible({ timeout: 15_000 });
     await logsBtn.click();
     const feed = page.locator("#activity-feed");

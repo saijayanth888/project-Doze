@@ -166,7 +166,7 @@ def build_graph(
         report = state.get("weakness_report", "No analysis available")
         logger.info("[training-data] targeting %d categories: %s", len(weak), weak)
 
-        max_samples = int((state.get("config") or {}).get("max_samples", 3000))
+        max_samples = int((state.get("config") or {}).get("max_samples") or 3000)
         try:
             result: CurationResult = await curator.curate(
                 weak_categories=weak,
@@ -207,6 +207,7 @@ def build_graph(
             run_id=state["run_id"],
             generation=state["generation"],
             adapter_path=state.get("adapter_path"),
+            config=state.get("config") or {},
         )
         state["child_scores"] = result.scores
         state["eval_seconds"] = result.duration_seconds or (time.perf_counter() - t0)

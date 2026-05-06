@@ -25,25 +25,11 @@ import {
   serveAdapter,
 } from '../config/api';
 
-const MOCK = {
-  adapters: [
-    {
-      adapter_id: 'run-demo__gen1',
-      run_id: 'run-demo',
-      generation: 1,
-      base_model: 'llama3.2:3b',
-      scores: { mmlu: 0.52, arc_challenge: 0.48, hellaswag: 0.61, gsm8k: 0.4, humaneval: 0.25 },
-      size_mb: 120.5,
-      is_champion: true,
-      promoted: true,
-      status: 'champion',
-      weak_categories: ['gsm8k'],
-      training_config: {},
-    },
-  ],
-  total: 1,
-  champion_id: 'run-demo__gen1',
-  total_disk_mb: 120.5,
+const EMPTY_ADAPTERS = {
+  adapters: [],
+  total: 0,
+  champion_id: null,
+  total_disk_mb: 0,
 };
 
 function avgScore(scores) {
@@ -70,8 +56,15 @@ export default function AdaptersPage() {
       setData(d);
       setErr(null);
     } catch (e) {
-      setData(MOCK);
-      setErr('API unavailable — showing mock data');
+      setData(EMPTY_ADAPTERS);
+      const st = e?.status;
+      if (st === 401 || st === 403) {
+        setErr('API key missing or invalid — configure the key in Settings.');
+      } else {
+        setErr(
+          'Could not load adapters — check API connectivity. Adapters will appear here after evolution runs produce checkpoints.',
+        );
+      }
     }
   }, []);
 
@@ -212,9 +205,16 @@ export default function AdaptersPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <Fragment key={row.adapter_id}>
-                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={7} style={{ padding: 24, textAlign: 'center', color: C.txtM, fontFamily: F.ui, fontSize: 13, lineHeight: 1.5 }}>
+                  No adapters yet — adapters appear after evolution runs complete.
+                </td>
+              </tr>
+            ) : (
+              rows.map((row) => (
+                <Fragment key={row.adapter_id}>
+                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
                   <td style={{ padding: 8 }}>
                     <button
                       type="button"
@@ -297,8 +297,8 @@ export default function AdaptersPage() {
                       </button>
                     </div>
                   </td>
-                </tr>
-                {expanded[row.adapter_id] && (
+                  </tr>
+                  {expanded[row.adapter_id] && (
                   <tr>
                     <td colSpan={7} style={{ padding: '0 16px 16px 40px', background: C.bgS }}>
                       <div style={{ fontSize: 11, color: C.txtM, marginBottom: 8 }}>Per-benchmark</div>
@@ -321,9 +321,10 @@ export default function AdaptersPage() {
                       </div>
                     </td>
                   </tr>
-                )}
-              </Fragment>
-            ))}
+                  )}
+                </Fragment>
+              ))
+            )}
           </tbody>
         </table>
       </div>

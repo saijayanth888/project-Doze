@@ -87,17 +87,30 @@ class OllamaClient:
     # Pull
     # ------------------------------------------------------------------
 
-    async def pull_model(self, model: str) -> bool:
+    async def pull(self, model: str) -> dict:
+        """Pull a model into Ollama.
+
+        Mirrors Ollama's `POST /api/pull` contract. We return the decoded JSON
+        response (best-effort) so the frontend can show feedback to the user.
+        """
         try:
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            async with httpx.AsyncClient(timeout=600.0) as client:
                 resp = await client.post(
                     f"{self._host}/api/pull",
-                    json={"name": model},
+                    json={"name": model, "stream": False},
                 )
                 resp.raise_for_status()
-                return True
+                try:
+                    return resp.json()
+                except Exception:
+                    return {"status": "ok", "model": model}
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
             raise RuntimeError("Ollama unreachable") from exc
         except httpx.HTTPStatusError as exc:
-            logger.error("pull_model %s failed: %s", model, exc)
-            return False
+            logger.error("pull %s failed: %s", model, exc)
+            return {"status": "error", "model": model, "detail": str(exc)}
+
+    # Backwards compatible alias (used by older internal code)
+    async def pull_model(self, model: str) -> bool:
+        await self.pull(model)
+        return True

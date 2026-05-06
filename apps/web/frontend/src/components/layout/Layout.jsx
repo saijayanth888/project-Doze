@@ -25,6 +25,7 @@ export default function Layout() {
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
         <TopBar champion={champion} />
         <main
+          id="mf-dashboard-scroll"
           className="mf-dashboard-canvas"
           style={{
             flex: 1,

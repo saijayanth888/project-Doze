@@ -19,13 +19,22 @@ export default function GPUMonitor() {
 
   if (!gpu.gpu_available) {
     return (
-      <div style={{ background: C.bgC, border: `1px solid ${C.border}`, borderRadius: 8, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.txtM} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <div style={{ background: C.bgC, border: `1px solid ${C.border}`, borderRadius: 8, padding: '14px 16px', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.txtM} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}>
           <rect x="4" y="8" width="16" height="12" rx="2"/><path d="M8 8V6"/><path d="M12 8V6"/><path d="M16 8V6"/>
         </svg>
-        <div>
-          <div style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 600, color: C.txtS }}>Apple Silicon — CPU Inference</div>
-          <div style={{ fontFamily: F.mono, fontSize: 10, color: C.txtM, marginTop: 2 }}>{gpu.note}</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 600, color: C.txtS }}>
+            No GPU metrics in API container
+          </div>
+          <div style={{ fontFamily: F.mono, fontSize: 10, color: C.txtM, marginTop: 6, lineHeight: 1.45 }}>
+            {gpu.note}
+          </div>
+          {gpu.inference_note ? (
+            <div style={{ fontFamily: F.ui, fontSize: 10, color: C.txtS, marginTop: 8, lineHeight: 1.5 }}>
+              {gpu.inference_note}
+            </div>
+          ) : null}
         </div>
       </div>
     );

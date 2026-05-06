@@ -45,7 +45,12 @@ class EvalBackend(Protocol):
     name: str
 
     async def evaluate(
-        self, *, run_id: str, generation: int, adapter_path: str | None
+        self,
+        *,
+        run_id: str,
+        generation: int,
+        adapter_path: str | None,
+        config: dict | None = None,
     ) -> EvalResult: ...
 
 
@@ -57,7 +62,12 @@ class MockEvalBackend:
         self._sleep_s = sleep_s
 
     async def evaluate(
-        self, *, run_id: str, generation: int, adapter_path: str | None
+        self,
+        *,
+        run_id: str,
+        generation: int,
+        adapter_path: str | None,
+        config: dict | None = None,
     ) -> EvalResult:
         await asyncio.sleep(self._sleep_s)
 
@@ -96,18 +106,40 @@ class LMEvalHarnessBackend:
             ) from exc
 
     async def evaluate(
-        self, *, run_id: str, generation: int, adapter_path: str | None
+        self,
+        *,
+        run_id: str,
+        generation: int,
+        adapter_path: str | None,
+        config: dict | None = None,
     ) -> EvalResult:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
-            None, self._evaluate_sync, run_id, generation, adapter_path
+            None,
+            self._evaluate_sync,
+            run_id,
+            generation,
+            adapter_path,
+            config,
         )
 
-    def _evaluate_sync(self, run_id: str, generation: int, adapter_path: str | None) -> EvalResult:
+    def _evaluate_sync(
+        self,
+        run_id: str,
+        generation: int,
+        adapter_path: str | None,
+        config: dict | None,
+    ) -> EvalResult:
         import lm_eval
 
+        from utils.hf_model_id import resolve_hf_base_model_id
+
         t0 = time.perf_counter()
-        base_model = os.environ.get("MODELFORGE_BASE_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
+        cfg_bm = (config or {}).get("base_model")
+        base_model = resolve_hf_base_model_id(
+            str(cfg_bm).strip() if cfg_bm else None,
+            env_fallback=os.environ.get("MODELFORGE_BASE_MODEL"),
+        )
 
         quick_eval = str(os.environ.get("MODELFORGE_QUICK_EVAL", "")).lower() in {"1", "true", "yes"}
         if quick_eval:

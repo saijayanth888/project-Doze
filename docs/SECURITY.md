@@ -48,10 +48,14 @@ threat model below reflects that.
 
 ### Network isolation
 
-- `ollama` and `vllm` are tagged `profiles: ["gpu"]` and only expose
-  ports on the internal Docker network (`expose:` instead of `ports:`).
-  The FastAPI container reaches them via `http://ollama:11434` /
-  `http://vllm:8000`.
+- **Ollama:** Often runs on the **host** (systemd), not in Docker. The API
+  container uses `OLLAMA_HOST` (default `http://host.docker.internal:11434`)
+  to call the host’s Ollama HTTP API. No Ollama container is required.
+  If you opt into the optional Compose `ollama` service (`profiles: ["gpu"]`),
+  set `OLLAMA_HOST=http://ollama:11434` instead.
+- **vLLM** is tagged `profiles: ["gpu"]` and only exposes port 8000 on the
+  internal Docker network (`expose:` instead of `ports:`). The API reaches
+  it at `http://vllm:8000` (or your `VLLM_HOST`).
 - vLLM **requires** `VLLM_API_KEY` (no `:-none` fallback) — Compose
   refuses to start the `gpu` profile without it.
 - n8n basic auth is enabled by default; `N8N_BASIC_AUTH_PASSWORD` is

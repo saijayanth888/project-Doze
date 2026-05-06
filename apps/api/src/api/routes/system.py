@@ -7,13 +7,14 @@ import logging
 import platform
 import sys
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from starlette import status as http_status
 
 from api.deps import get_db, get_ollama
 from api.schemas.system import EnvironmentInfo, GPUStatus, HealthCheck, N8nAlertIn
 from config.settings import settings
 from services.lineage_db import LineageDB
+from services.ollama_client import OllamaClient
 from utils.gpu import get_gpu_status
 
 logger = logging.getLogger("modelforge.routes.system")
@@ -76,8 +77,34 @@ async def liveness() -> dict:
 
 
 @router.get("/gpu", response_model=GPUStatus)
-async def gpu_status() -> GPUStatus:
-    return GPUStatus(**get_gpu_status())
+async def gpu_status(ollama: OllamaClient = Depends(get_ollama)) -> GPUStatus:
+    payload: dict = dict(get_gpu_status())
+    payload["ollama_inference_ok"] = False
+    try:
+        payload["ollama_inference_ok"] = await ollama.health_check() == "ok"
+    except Exception as exc:
+        logger.debug("Ollama health for GPU payload failed: %s", exc)
+    return GPUStatus(**payload)
+
+
+@router.get("/ollama-models")
+async def ollama_model_tags(ollama: OllamaClient = Depends(get_ollama)) -> dict[str, list[str]]:
+    """Tags currently available in Ollama (`/api/tags`) for evolution base-model pickers."""
+    try:
+        rows = await ollama.list_models()
+    except Exception as exc:
+        logger.warning("ollama list_models failed: %s", exc)
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Ollama unreachable — start the `ollama` service and gpu profile if needed.",
+        ) from exc
+
+    names: list[str] = []
+    for m in rows:
+        n = m.get("name") or m.get("model")
+        if n:
+            names.append(str(n))
+    return {"models": sorted(set(names))}
 
 
 @router.post("/alerts", status_code=http_status.HTTP_202_ACCEPTED)

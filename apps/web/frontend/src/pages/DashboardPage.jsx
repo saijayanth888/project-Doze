@@ -11,7 +11,7 @@ export default function DashboardPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Row 1: Evolution (5) + Champion (3.5) + Latest (3.5) */}
-      <div style={{ display: 'grid', gridTemplateColumns: '5fr 3.5fr 3.5fr', gap: 16, ...s(0) }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '5fr 3.5fr 3.5fr', gap: 16, minHeight: 0, ...s(0) }}>
         <EvolutionStatus />
         <ChampionCard />
         <LatestGeneration />

@@ -87,6 +87,9 @@ def create_app() -> FastAPI:
         title="ModelForge",
         description="Self-Evolving LLM Platform — Autonomous Model Evolution Engine",
         version="0.1.0",
+        # Some clients POST to paths without the trailing slash and previously got 307s.
+        # Disable redirects to ensure the request reaches the intended route.
+        redirect_slashes=False,
         lifespan=lifespan,
         docs_url="/docs" if not settings.is_production else None,
         redoc_url="/redoc" if not settings.is_production else None,

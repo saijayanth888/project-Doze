@@ -22,7 +22,7 @@ class ModelInfo(BaseModel):
 
 
 class ChampionInfo(BaseModel):
-    """Registry rows may include ``adapter_id``, ``name``, etc. — ignore extras."""
+    """Registry rows may include extra keys — ignored unless declared below."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -33,6 +33,8 @@ class ChampionInfo(BaseModel):
     avg_score: float = 0.0
     method: str | None = None
     promoted_at: datetime | None = None
+    adapter_id: str | None = None
+    ollama_model: str | None = None
 
 
 class GenerationInfo(BaseModel):

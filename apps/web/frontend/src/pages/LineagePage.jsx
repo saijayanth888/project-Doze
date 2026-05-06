@@ -19,21 +19,28 @@ export default function LineagePage() {
   const [selected, setSelected] = useState(null);
   const [err, setErr] = useState(null);
 
-  const load = useCallback(() => {
-    setTree(undefined);
-    setErr(null);
+  const load = useCallback((options = {}) => {
+    const silent = options.silent === true;
+    if (!silent) {
+      setTree(undefined);
+      setErr(null);
+    }
     apiFetch('/api/lineage/tree')
       .then((d) => {
         setTree(d);
       })
       .catch((e) => {
-        setErr(e?.message || String(e));
-        setTree(null);
+        if (!silent) {
+          setErr(e?.message || String(e));
+          setTree(null);
+        }
       });
   }, []);
 
   useEffect(() => {
-    load();
+    load({ silent: false });
+    const iv = setInterval(() => load({ silent: true }), 15_000);
+    return () => clearInterval(iv);
   }, [load]);
 
   if (tree === undefined) {
@@ -48,7 +55,7 @@ export default function LineagePage() {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, minHeight: '50vh', padding: 24 }}>
         <p style={{ fontFamily: F.mono, fontSize: 14, color: C.danger, textAlign: 'center', maxWidth: 420 }}>{err || 'Could not load lineage tree.'}</p>
-        <Button variant="primary" onClick={load}>
+        <Button variant="primary" onClick={() => load({ silent: false })}>
           Retry
         </Button>
       </div>

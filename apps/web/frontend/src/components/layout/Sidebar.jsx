@@ -60,13 +60,29 @@ export default function Sidebar({ collapsed, onToggle, champion }) {
       </div>
 
       {!collapsed && champion && (
-        <div style={{ margin: '10px 12px', padding: '10px 12px', background: C.bgC, border: `1px solid rgba(118,185,0,0.2)`, borderRadius: 8 }}>
+        <button
+          type="button"
+          onClick={() => navigate('/playground')}
+          title="Open Playground with champion model"
+          style={{
+            margin: '10px 12px',
+            padding: '10px 12px',
+            background: C.bgC,
+            border: `1px solid rgba(118,185,0,0.2)`,
+            borderRadius: 8,
+            cursor: 'pointer',
+            textAlign: 'left',
+            width: 'calc(100% - 24px)',
+            display: 'block',
+          }}
+        >
           <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: C.txtM, marginBottom: 4 }}>Champion</div>
           <div style={{ fontFamily: F.mono, fontSize: 12, color: C.acc, fontWeight: 600 }}>{champion.name || champion.base_model}</div>
           <div style={{ fontFamily: F.mono, fontSize: 10, color: C.txtM, marginTop: 2 }}>
             Gen {champion.generation} · {champion.avg_score?.toFixed(3) || '—'}
           </div>
-        </div>
+          <div style={{ fontFamily: F.ui, fontSize: 10, color: C.acc, marginTop: 6, opacity: 0.9 }}>Click to open Playground →</div>
+        </button>
       )}
       {collapsed && (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0' }}>

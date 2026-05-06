@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
-from api.deps import get_db
+from api.deps import get_db, get_registry
 from api.schemas.evaluation import (
     BenchmarkInfo,
     BenchmarkResult,
@@ -16,6 +16,7 @@ from api.schemas.evaluation import (
     ScoreTrend,
 )
 from services.lineage_db import LineageDB
+from services.model_registry import ModelRegistry
 
 logger = logging.getLogger("modelforge.routes.evaluation")
 
@@ -61,6 +62,37 @@ _BENCHMARKS: list[dict] = [
 _BENCHMARK_KEYS = [b["key"] for b in _BENCHMARKS]
 _BENCHMARK_WEIGHTS: dict[str, float] = {b["key"]: b["weight"] for b in _BENCHMARKS}
 
+# Registry / external tools sometimes use non-canonical keys; normalize for charts and weighted avg.
+_BENCHMARK_ALIASES: dict[str, str] = {
+    "mmlu": "mmlu",
+    "mmlu_eval": "mmlu",
+    "mmlueval": "mmlu",
+    "arc_challenge": "arc_challenge",
+    "arc_c": "arc_challenge",
+    "arcc": "arc_challenge",
+    "hellaswag": "hellaswag",
+    "gsm8k": "gsm8k",
+    "humaneval": "humaneval",
+}
+
+
+def _canonical_benchmark_key(key: str) -> str | None:
+    k = str(key).strip().lower().replace("-", "_")
+    cand = _BENCHMARK_ALIASES.get(k) or (k if k in _BENCHMARK_WEIGHTS else None)
+    return cand if cand in _BENCHMARK_WEIGHTS else None
+
+
+def _normalize_trend_row(t: Any) -> Any:
+    if not isinstance(t, dict):
+        return t
+    bm = t.get("benchmark")
+    if bm is None:
+        return t
+    canon = _canonical_benchmark_key(str(bm))
+    if canon:
+        return {**t, "benchmark": canon}
+    return t
+
 
 def _weighted_avg(scores: dict[str, float]) -> float:
     total_weight = 0.0
@@ -72,23 +104,80 @@ def _weighted_avg(scores: dict[str, float]) -> float:
     return round(weighted_sum / total_weight, 4) if total_weight > 0 else 0.0
 
 
+def _registry_champion_trends_and_results(
+    registry: ModelRegistry,
+) -> tuple[list[dict], list[BenchmarkResult]]:
+    """When Postgres has no score rows, use champion ``scores`` from ``registry.json`` if present."""
+    from api.routes.models import _normalize_champion_dict
+
+    raw = registry.get_champion()
+    if not isinstance(raw, dict):
+        return [], []
+    norm = _normalize_champion_dict(raw)
+    scores_in = norm.get("scores") or {}
+    if not isinstance(scores_in, dict) or not scores_in:
+        return [], []
+
+    scores: dict[str, float] = {}
+    for k, v in scores_in.items():
+        canon = _canonical_benchmark_key(str(k))
+        if canon is None:
+            continue
+        try:
+            scores[canon] = float(v)
+        except (TypeError, ValueError):
+            continue
+    if not scores:
+        return [], []
+
+    try:
+        gen = int(norm.get("generation", 0) or 0)
+    except (TypeError, ValueError):
+        gen = 0
+    promoted = True
+    trends: list[dict] = []
+    for bm, child_score in scores.items():
+        trends.append(
+            {
+                "generation": gen,
+                "benchmark": bm,
+                "parent_score": 0.0,
+                "child_score": child_score,
+                "delta": child_score,
+                "promoted": promoted,
+            }
+        )
+    avg = _weighted_avg(scores)
+    results = [
+        BenchmarkResult(
+            generation=gen,
+            scores=scores,
+            avg_score=avg,
+            promoted=promoted,
+        )
+    ]
+    return trends, results
+
+
 @router.get("/scores", response_model=ScoresResponse)
 async def get_scores(
     db: LineageDB = Depends(get_db),
+    registry: ModelRegistry = Depends(get_registry),
 ) -> ScoresResponse:
     """Return benchmark score trends across all generations."""
+    raw_trends: list = []
     try:
-        if not await db.has_evolution_runs():
-            return ScoresResponse(
-                total_datapoints=0,
-                generations=0,
-                benchmarks=0,
-                trends=[],
-            )
-        raw_trends = await db.get_score_trends()
+        if await db.has_evolution_runs():
+            raw_trends = await db.get_score_trends()
     except Exception as exc:
         logger.warning("DB unavailable for score trends: %s", exc)
         raw_trends = []
+
+    if not raw_trends:
+        reg_trends, _ = _registry_champion_trends_and_results(registry)
+        raw_trends = reg_trends
+
+    raw_trends = [_normalize_trend_row(t) for t in raw_trends]
 
     if not raw_trends:
         return ScoresResponse(
@@ -121,18 +210,22 @@ async def get_benchmarks() -> BenchmarksResponse:
 @router.get("/generations", response_model=list[BenchmarkResult])
 async def get_generation_results(
     db: LineageDB = Depends(get_db),
+    registry: ModelRegistry = Depends(get_registry),
 ) -> list[BenchmarkResult]:
     """Return per-generation aggregated benchmark scores."""
+    raw_trends: list = []
     try:
-        if not await db.has_evolution_runs():
-            return []
-        raw_trends = await db.get_score_trends()
+        if await db.has_evolution_runs():
+            raw_trends = await db.get_score_trends()
     except Exception as exc:
         logger.warning("DB unavailable for generation results: %s", exc)
         raw_trends = []
 
     if not raw_trends:
-        return []
+        _, reg_results = _registry_champion_trends_and_results(registry)
+        return reg_results
+
+    raw_trends = [_normalize_trend_row(t) for t in raw_trends]
 
     # Group trends by generation, collect child_score per benchmark
     gen_scores: dict[int, dict[str, float]] = defaultdict(dict)
@@ -165,6 +258,10 @@ async def get_generation_results(
                 promoted=gen_promoted.get(gen, False),
             )
         )
+
+    if not results:
+        _, reg_results = _registry_champion_trends_and_results(registry)
+        return reg_results
 
     return results
 

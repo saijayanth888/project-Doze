@@ -1,15 +1,33 @@
 import { LineChart, Line, ResponsiveContainer, Tooltip } from 'recharts';
-import { GENS, BENCHMARK_LABELS } from '../../config/mockData';
 import { BENCH_COLORS } from '../../config/colors';
 
 const KEYS = ['mmlu', 'arc_challenge', 'hellaswag', 'gsm8k', 'humaneval'];
+const BENCHMARK_LABELS = {
+  mmlu: 'MMLU',
+  arc_challenge: 'ARC-C',
+  hellaswag: 'HellaSwag',
+  gsm8k: 'GSM8K',
+  humaneval: 'HumanEval',
+};
 
-const data = GENS.map(g => ({
-  gen: g.generation,
-  ...Object.fromEntries(KEYS.map(k => [k, parseFloat((g.childScores[k] * 100).toFixed(2))]))
-}));
+export default function TrendCharts({ generations = [] }) {
+  const gens = Array.isArray(generations) ? generations : [];
+  if (!gens.length) {
+    return (
+      <div style={{ padding: 16, textAlign: 'center', color: '#64748b', fontFamily: 'JetBrains Mono, monospace' }}>
+        Trend charts will appear after evolution runs complete.
+      </div>
+    );
+  }
 
-export default function TrendCharts() {
+  const data = gens.map((g) => {
+    const scores = g.childScores ?? g.scores ?? g.child_scores ?? {};
+    return {
+      gen: g.generation,
+      ...Object.fromEntries(KEYS.map((k) => [k, parseFloat(((scores[k] ?? 0) * 100).toFixed(2))])),
+    };
+  });
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
       {KEYS.map(k => {

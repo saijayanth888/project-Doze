@@ -60,7 +60,8 @@ test.describe("API endpoints", () => {
 
   test("inference via Ollama works", async ({ request }) => {
     test.skip(!API_KEY, "MODELFORGE_API_KEY required for authenticated infer");
-    const res = await request.post(`${API_BASE}/api/infer`, {
+    // Trailing slash avoids a 307 to a Location that must preserve Host:port (see infra/nginx.conf).
+    const res = await request.post(`${API_BASE}/api/infer/`, {
       headers: { ...apiHeaders, "Content-Type": "application/json" },
       data: { prompt: "Say hello in exactly 3 words", max_tokens: 20 },
     });

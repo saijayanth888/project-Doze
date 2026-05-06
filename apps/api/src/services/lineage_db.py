@@ -197,7 +197,12 @@ class LineageDB:
                 SET status              = $2,
                     current_generation  = $3,
                     current_step        = $4,
-                    error               = COALESCE($5, error)
+                    error               = COALESCE($5, error),
+                    completed_at        = CASE
+                        WHEN $2::text IN ('completed', 'failed', 'stopped')
+                             AND completed_at IS NULL THEN NOW()
+                        ELSE completed_at
+                    END
                 WHERE run_id = $1
                 """,
                 run_id,

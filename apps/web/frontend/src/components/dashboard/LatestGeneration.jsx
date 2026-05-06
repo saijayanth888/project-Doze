@@ -6,22 +6,54 @@ import Badge from '../shared/Badge';
 export default function LatestGeneration() {
   const [gens, setGens] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  /** Champion exists in registry but Postgres has no generation rows yet. */
+  const [registryWithoutDb, setRegistryWithoutDb] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    apiFetch('/api/lineage/generations')
-      .then((rows) => {
-        if (!cancelled && Array.isArray(rows)) setGens(rows);
-      })
-      .catch(() => {
-        if (!cancelled) setGens([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+
+    const load = (silent = false) => {
+      if (!silent) {
+        setLoading(true);
+        setError(null);
+      }
+      apiFetch('/api/lineage/generations')
+        .then((rows) => {
+          if (!cancelled && Array.isArray(rows)) {
+            setGens(rows);
+            if (rows.length === 0) {
+              apiFetch('/api/models/champion')
+                .then((c) => {
+                  if (cancelled) return;
+                  setRegistryWithoutDb(!!c && (c.generation ?? 0) > 0);
+                })
+                .catch(() => {
+                  if (!cancelled) setRegistryWithoutDb(false);
+                });
+            } else if (!cancelled) {
+              setRegistryWithoutDb(false);
+            }
+          }
+        })
+        .catch((e) => {
+          if (!cancelled) {
+            setGens([]);
+            setRegistryWithoutDb(false);
+            setError(e?.status ? `Request failed (HTTP ${e.status}).` : 'Could not load latest generation.');
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    };
+
+    load(false);
+    const iv = setInterval(() => load(true), 5000);
+
     return () => {
       cancelled = true;
+      clearInterval(iv);
     };
   }, []);
 
@@ -39,6 +71,16 @@ export default function LatestGeneration() {
     );
   }
 
+  if (error) {
+    return (
+      <div className="mf-card-hover" style={{ background: C.bgC, border: `1px solid ${C.border}`, borderRadius: 8, padding: 18, height: '100%', boxSizing: 'border-box' }}>
+        <div style={{ fontFamily: F.ui, fontSize: 13, color: C.danger, lineHeight: 1.5 }}>
+          {error}
+        </div>
+      </div>
+    );
+  }
+
   if (!gen) {
     return (
       <div className="mf-card-hover" style={{ background: C.bgC, border: `1px solid ${C.border}`, borderRadius: 8, padding: 18, height: '100%', boxSizing: 'border-box' }}>
@@ -48,6 +90,12 @@ export default function LatestGeneration() {
         <p style={{ fontFamily: F.ui, fontSize: 13, color: C.txtM, lineHeight: 1.5, margin: 0 }}>
           No generations yet — complete an evolution run to see parent vs child scores here.
         </p>
+        {registryWithoutDb ? (
+          <p style={{ fontFamily: F.ui, fontSize: 12, color: C.warning, lineHeight: 1.5, margin: '12px 0 0 0' }}>
+            A champion is registered, but the lineage database has no generation history yet. After the next evolution
+            completes, scores will appear here. If this persists, confirm Postgres is the same instance the API uses.
+          </p>
+        ) : null}
       </div>
     );
   }

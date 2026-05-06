@@ -278,7 +278,7 @@ export default function SettingsPanel() {
     <div>
       <Section title="EVOLUTION PRESETS">
         <p style={{ fontSize: 12, color: C.txtM, fontFamily: F.ui, marginBottom: 12 }}>
-          Built-in presets are read-only. &quot;Use&quot; opens the dashboard with that preset selected.
+          {`Built-in presets are read-only. "Use" opens the dashboard with that preset selected.`}
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
           {presets.map((p) => (

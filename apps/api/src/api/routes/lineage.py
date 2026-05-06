@@ -7,10 +7,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from api.deps import get_db
+from api.deps import get_db, get_registry
 from api.schemas.lineage import LineageEdge, LineageNodeSchema, LineageTree
 from api.schemas.models import GenerationInfo
 from services.lineage_db import LineageDB
+from services.model_registry import ModelRegistry
 
 logger = logging.getLogger("modelforge.routes.lineage")
 
@@ -126,6 +127,77 @@ def _build_lineage_tree(generations: list[dict]) -> LineageTree:
     )
 
 
+def _lineage_tree_from_registry_champion(raw: dict | None) -> LineageTree | None:
+    """Single-node tree from ``registry.json`` when Postgres has no generation rows.
+
+    Uses the same coercions as ``GET /api/models/champion`` so if the UI shows a champion,
+    lineage can still render when the DB has no ``generations`` rows yet.
+    """
+    if not raw or not isinstance(raw, dict):
+        return None
+
+    # Lazy import avoids any circular import at module load.
+    from api.routes.models import _normalize_champion_dict
+
+    norm = _normalize_champion_dict(raw)
+    base = str(norm.get("base_model") or "").strip()
+    ollama_model = str(raw.get("ollama_model") or "").strip()
+    adapter_id = str(raw.get("adapter_id") or "").strip()
+    adapter_path = str(raw.get("adapter_path") or "").strip()
+
+    if not base:
+        if ollama_model:
+            base = ollama_model
+        elif adapter_id:
+            base = f"(adapter {adapter_id})"
+        elif adapter_path:
+            base = adapter_path
+        else:
+            return None
+
+    try:
+        gen = int(norm.get("generation", 0) or 0)
+    except (TypeError, ValueError):
+        gen = 0
+    scores_in = norm.get("scores")
+    scores: dict[str, float] = scores_in if isinstance(scores_in, dict) else {}
+    if not scores:
+        scores = _parse_score_dict(raw.get("scores"))
+    try:
+        avg = float(norm.get("avg_score", 0) or 0)
+    except (TypeError, ValueError):
+        avg = 0.0
+    if scores and avg == 0.0:
+        avg = sum(scores.values()) / len(scores)
+
+    node_id = adapter_id or (f"registry:{adapter_path}" if adapter_path else f"registry-gen-{gen}")
+    method = raw.get("method") or norm.get("method")
+    node = LineageNodeSchema(
+        id=node_id,
+        label=f"Generation {gen} ★" if gen else "Champion (registry) ★",
+        generation=max(gen, 0),
+        promoted=True,
+        scores=scores,
+        avg_score=round(avg, 4),
+        is_champion=True,
+        method=str(method) if method else "registry",
+        decision_reason=(
+            "Snapshot from model registry — connect Postgres and complete an evolution run "
+            "to persist full lineage (runs, edges, and history) in the database."
+        ),
+        parent_id=None,
+    )
+
+    return LineageTree(
+        nodes=[node],
+        edges=[],
+        total_nodes=1,
+        total_promoted=1,
+        total_discarded=0,
+        champion_id=node_id,
+    )
+
+
 @router.get("/generations", response_model=list[GenerationInfo])
 async def list_generations(db: LineageDB = Depends(get_db)) -> list[GenerationInfo]:
     """All evolution generations (for dashboards — parent vs child scores)."""
@@ -142,56 +214,47 @@ async def list_generations(db: LineageDB = Depends(get_db)) -> list[GenerationIn
 @router.get("/tree", response_model=LineageTree)
 async def get_lineage_tree(
     db: LineageDB = Depends(get_db),
+    registry: ModelRegistry = Depends(get_registry),
 ) -> LineageTree:
-    """Return the full lineage tree (nodes + edges). Empty when no rows exist."""
+    """Return the full lineage tree (nodes + edges).
+
+    Primary source is ``generations`` in Postgres. If that table is empty but a champion
+    exists on disk (``registry.json``), return a one-node snapshot so the UI is not blank.
+    """
     try:
-        if not await db.has_evolution_runs():
-            return LineageTree(
-                nodes=[],
-                edges=[],
-                total_nodes=0,
-                total_promoted=0,
-                total_discarded=0,
-                champion_id=None,
-            )
         generations = await db.get_all_generations()
     except Exception as exc:
         logger.warning("DB unavailable for lineage tree: %s", exc)
         generations = []
 
-    if not generations:
-        return LineageTree(
-            nodes=[],
-            edges=[],
-            total_nodes=0,
-            total_promoted=0,
-            total_discarded=0,
-            champion_id=None,
-        )
+    if generations:
+        return _build_lineage_tree(generations)
 
-    return _build_lineage_tree(generations)
-
-
-@router.get("/activity", response_model=list[dict[str, Any]])
-async def get_activity_feed(
-    db: LineageDB = Depends(get_db),
-) -> list[dict]:
-    """Return the 8 most recent evolution events."""
     try:
-        if not await db.has_evolution_runs():
-            return []
-        generations = await db.get_all_generations()
+        champ_raw = registry.get_champion()
     except Exception as exc:
-        logger.warning("DB unavailable for activity feed: %s", exc)
-        generations = []
+        logger.warning("Registry read failed for lineage tree fallback: %s", exc)
+        champ_raw = None
 
-    if not generations:
-        return []
+    fallback = _lineage_tree_from_registry_champion(
+        champ_raw if isinstance(champ_raw, dict) else None
+    )
+    if fallback is not None:
+        return fallback
 
-    # Build a synthetic activity feed from generation rows
+    return LineageTree(
+        nodes=[],
+        edges=[],
+        total_nodes=0,
+        total_promoted=0,
+        total_discarded=0,
+        champion_id=None,
+    )
+
+
+def _events_from_generations(generations: list[dict]) -> list[dict]:
     events: list[dict] = []
     generations_sorted = sorted(generations, key=lambda g: g.get("generation", 0))
-
     for gen in generations_sorted:
         gen_num = gen.get("generation", 0)
         run_id = gen.get("run_id", "unknown")
@@ -219,7 +282,102 @@ async def get_activity_feed(
                 "timestamp": str(created_at) if created_at else None,
             }
         )
-
-    # Return newest-first, limited to 8
     events.reverse()
     return events[:8]
+
+
+async def _fallback_activity_from_run_and_registry(
+    db: LineageDB,
+    registry: ModelRegistry,
+) -> list[dict]:
+    """When no generation rows exist yet, still surface latest run + champion so Activity isn't blank."""
+    out: list[dict] = []
+    try:
+        run = await db.get_dashboard_run()
+    except Exception as exc:
+        logger.warning("activity fallback get_dashboard_run failed: %s", exc)
+        run = None
+
+    if isinstance(run, dict) and run.get("run_id"):
+        rid = str(run["run_id"])
+        st = str(run.get("status", "") or "unknown")
+        step = run.get("current_step") or ""
+        err = run.get("error")
+        parts = [f"Run {rid}", st]
+        if step:
+            parts.append(f"step: {step}")
+        if err:
+            parts.append(f"error: {err}")
+        msg = " · ".join(parts)
+        out.append(
+            {
+                "id": f"evt-run-{rid}",
+                "type": "run_status",
+                "event": msg,
+                "message": msg,
+                "generation": int(run.get("current_generation", 0) or 0),
+                "run_id": rid,
+                "timestamp": str(run.get("started_at")) if run.get("started_at") else None,
+            }
+        )
+
+    try:
+        champ_raw = registry.get_champion()
+    except Exception as exc:
+        logger.warning("activity fallback registry read failed: %s", exc)
+        champ_raw = None
+
+    if isinstance(champ_raw, dict):
+        from api.routes.models import _normalize_champion_dict
+
+        norm = _normalize_champion_dict(champ_raw)
+        base = str(norm.get("base_model") or "").strip()
+        if not base:
+            ollama_model = str(champ_raw.get("ollama_model") or "").strip()
+            adapter_id = str(champ_raw.get("adapter_id") or "").strip()
+            adapter_path = str(champ_raw.get("adapter_path") or "").strip()
+            if ollama_model:
+                base = ollama_model
+            elif adapter_id:
+                base = f"(adapter {adapter_id})"
+            elif adapter_path:
+                base = adapter_path
+        if base:
+            try:
+                gen = int(norm.get("generation", 0) or 0)
+            except (TypeError, ValueError):
+                gen = 0
+            msg = f"Champion on disk (registry.json): gen {gen} · {base}"
+            out.append(
+                {
+                    "id": "evt-registry-champion",
+                    "type": "registry_snapshot",
+                    "event": msg,
+                    "message": msg,
+                    "generation": gen,
+                    "run_id": None,
+                    "timestamp": str(champ_raw.get("promoted_at")) if champ_raw.get("promoted_at") else None,
+                }
+            )
+
+    # Run status first (most actionable), then registry champion.
+    return out[:8]
+
+
+@router.get("/activity", response_model=list[dict[str, Any]])
+async def get_activity_feed(
+    db: LineageDB = Depends(get_db),
+    registry: ModelRegistry = Depends(get_registry),
+) -> list[dict]:
+    """Return recent evolution-related activity (generations, else run status + registry snapshot)."""
+    generations: list[dict] = []
+    try:
+        generations = await db.get_all_generations()
+    except Exception as exc:
+        logger.warning("DB unavailable for activity feed: %s", exc)
+        generations = []
+
+    if generations:
+        return _events_from_generations(generations)
+
+    return await _fallback_activity_from_run_and_registry(db, registry)

@@ -67,8 +67,22 @@ export default function TopBar() {
             <path d="M8 8V6"/><path d="M12 8V6"/><path d="M16 8V6"/>
             <path d="M8 20v2"/><path d="M12 20v2"/><path d="M16 20v2"/>
           </svg>
-          <span style={{ fontFamily: F.mono, fontSize: 11, color: C.txtS }}>
-            {gpuUtil?.gpu_available ? `GPU ${gpuUtil.util_percent ?? '—'}%` : 'CPU'}
+          <span
+            style={{
+              fontFamily: F.mono,
+              fontSize: 11,
+              color: gpuUtil?.gpu_available
+                ? ((gpuUtil?.util_percent ?? 0) > 80 ? C.warning : C.txtS)
+                : gpuUtil?.ollama_inference_ok
+                  ? C.acc
+                  : C.txtS,
+            }}
+          >
+            {gpuUtil?.gpu_available
+              ? `GPU ${gpuUtil.util_percent ?? '—'}%`
+              : gpuUtil?.ollama_inference_ok
+                ? 'Ollama · GPU'
+                : 'No GPU'}
           </span>
         </div>
 

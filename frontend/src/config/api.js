@@ -49,6 +49,9 @@ async function rawFetch(path, options, timeoutMs) {
   try {
     const res = await fetch(`${BASE}${path}`, {
       ...options,
+      // Some FastAPI deployments redirect missing trailing slashes.
+      // Follow redirects so POST bodies don't break the request.
+      redirect: 'follow',
       signal: controller.signal,
       headers: buildHeaders(options.headers || {}),
     });

@@ -40,14 +40,24 @@ async def get_evolution_aggregate_status(
         except Exception:
             config = {}
 
+    st = str(run.get("status", "unknown"))
     started = run.get("started_at")
     elapsed = None
     if isinstance(started, datetime):
         if started.tzinfo is None:
             started = started.replace(tzinfo=UTC)
-        elapsed = max(0.0, (datetime.now(UTC) - started).total_seconds())
+        if st in ("completed", "failed", "stopped"):
+            # Wall-clock "elapsed" must not grow after the run ends (fixes idle UI still counting up).
+            completed = run.get("completed_at")
+            if isinstance(completed, datetime):
+                if completed.tzinfo is None:
+                    completed = completed.replace(tzinfo=UTC)
+                elapsed = max(0.0, (completed - started).total_seconds())
+            else:
+                elapsed = None
+        else:
+            elapsed = max(0.0, (datetime.now(UTC) - started).total_seconds())
 
-    st = str(run.get("status", "unknown"))
     if st in ("completed", "failed", "stopped"):
         poll_status = "idle"
         is_running = False

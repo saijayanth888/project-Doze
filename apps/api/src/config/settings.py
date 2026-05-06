@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     modelforge_data_root: str | None = Field(default=None, alias="MODELFORGE_DATA_ROOT")
 
     # ── Inference backends ─────────────────────────────
-    ollama_host: str = "http://localhost:11434"
+    ollama_host: str = "http://host.docker.internal:11434"
     vllm_host: str = "http://localhost:8001"
     vllm_api_key: str | None = None
 

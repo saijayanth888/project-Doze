@@ -1,8 +1,14 @@
 import { X } from 'lucide-react';
-import { BENCHMARK_LABELS } from '../../config/mockData';
 import { BENCH_COLORS } from '../../config/colors';
 
 const KEYS = ['mmlu', 'arc_challenge', 'hellaswag', 'gsm8k', 'humaneval'];
+const BENCHMARK_LABELS = {
+  mmlu: 'MMLU',
+  arc_challenge: 'ARC-C',
+  hellaswag: 'HellaSwag',
+  gsm8k: 'GSM8K',
+  humaneval: 'HumanEval',
+};
 
 function scoresOf(n) {
   if (!n) return {};
@@ -17,7 +23,12 @@ export default function LineageDetail({ node, onClose, allNodes = [] }) {
   const parent = parentId ? allNodes.find(p => p.id === parentId) : null;
   const parentScores = parent ? scoresOf(parent) : (node.parentScores || node.parent_scores || {});
 
-  const avgChild = KEYS.reduce((s, k) => s + (childScores[k] ?? 0), 0) / KEYS.length;
+  const hasAnyChildBench = KEYS.some((k) => typeof childScores[k] === 'number');
+  const avgChild = hasAnyChildBench
+    ? KEYS.reduce((s, k) => s + (childScores[k] ?? 0), 0) / KEYS.length
+    : typeof node.avg_score === 'number'
+      ? node.avg_score
+      : KEYS.reduce((s, k) => s + (childScores[k] ?? 0), 0) / KEYS.length;
   const hasParentScores = KEYS.some(k => typeof parentScores[k] === 'number');
   const avgParent = hasParentScores
     ? KEYS.reduce((s, k) => s + (parentScores[k] ?? 0), 0) / KEYS.length
@@ -85,6 +96,14 @@ export default function LineageDetail({ node, onClose, allNodes = [] }) {
       <div style={{ fontSize: 11, color: '#64748b', fontFamily: 'JetBrains Mono, monospace', letterSpacing: 1, marginBottom: 10 }}>
         BENCHMARK SCORES
       </div>
+
+      {!hasAnyChildBench ? (
+        <div style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'Outfit, sans-serif', lineHeight: 1.45, marginBottom: 12 }}>
+          {typeof node.avg_score === 'number' && node.avg_score > 0
+            ? `Average (summary only): ${node.avg_score.toFixed(3)} — per-benchmark breakdown is stored when evaluation runs write to Postgres or when the champion registry row includes a full scores map.`
+            : 'Per-benchmark scores are not stored for this snapshot. They appear after an evolution run completes evaluations (Postgres) or when registry.json lists scores for each benchmark key.'}
+        </div>
+      ) : null}
 
       {KEYS.map(k => {
         const child = childScores[k];

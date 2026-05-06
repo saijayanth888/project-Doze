@@ -10,6 +10,8 @@ const PAGE_LABELS = {
   '/benchmarks': 'Benchmarks',
   '/playground': 'Playground',
   '/settings':   'Settings',
+  '/adapters':   'Adapters',
+  '/datasets':   'Datasets',
 };
 
 export default function TopBar({ champion = null }) {
@@ -40,7 +42,7 @@ export default function TopBar({ champion = null }) {
       } catch {}
     };
     fetchGpu();
-    const iv = setInterval(fetchGpu, 3000);
+    const iv = setInterval(fetchGpu, 5000);
     return () => clearInterval(iv);
   }, []);
 
@@ -54,11 +56,29 @@ export default function TopBar({ champion = null }) {
       }
     };
     poll();
-    const iv = setInterval(poll, 3000);
+    const iv = setInterval(poll, 5000);
     return () => clearInterval(iv);
   }, []);
 
   const page = PAGE_LABELS[location.pathname] || 'ModelForge';
+
+  const gpuAvailable = gpuUtil?.gpu_available === true;
+  const gpuUtilNum = typeof gpuUtil?.util_percent === 'number' ? gpuUtil.util_percent : null;
+  const gpuUtilDisp = gpuUtilNum != null ? gpuUtilNum.toFixed(0) : '—';
+
+  const vramUnified = gpuUtil?.vram_total_gb == null && gpuUtil?.vram_used_gb == null;
+  const vramUsedDisp =
+    gpuUtil?.vram_used_gb != null && Number.isFinite(Number(gpuUtil.vram_used_gb))
+      ? Number(gpuUtil.vram_used_gb).toFixed(1)
+      : '—';
+  const vramTotalDisp =
+    gpuUtil?.vram_total_gb != null && Number.isFinite(Number(gpuUtil.vram_total_gb))
+      ? Number(gpuUtil.vram_total_gb).toFixed(0)
+      : '—';
+
+  const tempNum = typeof gpuUtil?.temp_celsius === 'number' ? gpuUtil.temp_celsius : null;
+  const tempDisp = tempNum != null ? tempNum.toFixed(0) : '—';
+  const tempTone = tempNum == null ? null : tempNum < 60 ? C.acc : tempNum < 80 ? C.warning : C.danger;
 
   return (
     <div
@@ -123,12 +143,23 @@ export default function TopBar({ champion = null }) {
             <path d="M8 8V6"/><path d="M12 8V6"/><path d="M16 8V6"/>
             <path d="M8 20v2"/><path d="M12 20v2"/><path d="M16 20v2"/>
           </svg>
-          <span style={{ fontFamily: F.mono, fontSize: 11, color: (gpuUtil?.util_percent ?? 0) > 80 ? C.warning : C.txtS }}>
-            {gpuUtil?.gpu_available ? `GPU ${gpuUtil.util_percent ?? '—'}%` : 'CPU'}
+          <span
+            title={[gpuUtil?.note, gpuUtil?.inference_note].filter(Boolean).join('\n\n') || undefined}
+            style={{
+              fontFamily: F.mono,
+              fontSize: 11,
+              color: tempTone || (gpuUtilNum != null && gpuUtilNum > 80 ? C.warning : C.txtS),
+              maxWidth: 140,
+              cursor: 'help',
+            }}
+          >
+            {gpuAvailable
+              ? `GPU ${gpuUtilDisp}% · ${tempNum != null ? `${tempDisp}°C` : '—°C'}`
+              : 'GPU ·'}
           </span>
         </div>
 
-        {/* VRAM */}
+        {/* VRAM / Unified Memory */}
         {gpuUtil?.gpu_available && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.txtM} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -136,7 +167,7 @@ export default function TopBar({ champion = null }) {
               <path d="M8 4v12"/><path d="M16 4v12"/>
             </svg>
             <span style={{ fontFamily: F.mono, fontSize: 11, color: C.txtS }}>
-              {gpuUtil.vram_used_gb?.toFixed(1)}/{gpuUtil.vram_total_gb?.toFixed(0)}GB
+              {vramUnified ? 'Unified Memory' : `${vramUsedDisp}/${vramTotalDisp}GB`}
             </span>
           </div>
         )}

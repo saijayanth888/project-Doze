@@ -1,4 +1,4 @@
-.PHONY: help dev db-only api frontend up down build logs logs-api install install-dev clean health pull-model n8n-open dashboard-open test lint format test-e2e test-e2e-spark n8n-bootstrap first-run
+.PHONY: help dev db-only api frontend up down build logs logs-api install install-dev clean health pull-model n8n-open dashboard-open test lint format test-e2e test-e2e-spark n8n-bootstrap n8n-import first-run
 
 PYTHON ?= python3.13
 VENV   ?= .venv
@@ -21,6 +21,7 @@ help:
 	@echo "  test-e2e-spark Playwright Spark suite (LAN_IP from .env; API via :3001 unless API_URL set)"
 	@echo "  first-run       Pre-flight checks + POST /api/evolve/start (uses scripts/start_first_evolution.sh)"
 	@echo "  n8n-bootstrap  Wait for n8n + create owner via REST (see .env)"
+	@echo "  n8n-import     Import & activate integrations/n8n/workflows/*.json via API"
 	@echo "  lint           ruff + mypy"
 	@echo "  health         curl /api/system/health"
 
@@ -95,7 +96,12 @@ first-run:
 
 n8n-bootstrap:
 	chmod +x scripts/n8n-wait-and-login.sh
+	chmod +x scripts/n8n-import-all.sh
 	./scripts/n8n-wait-and-login.sh
+
+n8n-import:
+	chmod +x scripts/n8n-import-all.sh
+	bash scripts/n8n-import-all.sh
 
 # ── Utilities ─────────────────────────────────────────────
 pull-model:

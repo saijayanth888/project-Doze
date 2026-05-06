@@ -68,6 +68,8 @@ async function rawFetch(path, options, timeoutMs) {
   try {
     const res = await fetch(`${getApiBase()}${path}`, {
       ...options,
+      // Ensure POST redirects (e.g. from FastAPI `/infer` -> `/infer/`) are followed.
+      redirect: 'follow',
       signal: controller.signal,
       headers: buildHeaders(options.headers || {}),
     });
@@ -118,6 +120,7 @@ async function rawFetchMultipart(path, formData, timeoutMs = DEFAULT_TIMEOUT_MS)
     const res = await fetch(`${getApiBase()}${path}`, {
       method: 'POST',
       body: formData,
+      redirect: 'follow',
       signal: controller.signal,
       headers,
     });
@@ -138,7 +141,8 @@ async function rawFetchMultipart(path, formData, timeoutMs = DEFAULT_TIMEOUT_MS)
 }
 
 export async function fetchAdapters() {
-  return apiFetch('/api/adapters');
+  // Backend list route is registered at `/api/adapters/` (trailing slash).
+  return apiFetch('/api/adapters/');
 }
 
 export async function getAdapter(adapterId) {
@@ -173,7 +177,8 @@ export async function cleanupAdapters(params = {}) {
 }
 
 export async function fetchDatasets() {
-  return apiFetch('/api/datasets');
+  // Backend list route is registered at `/api/datasets/` (trailing slash).
+  return apiFetch('/api/datasets/');
 }
 
 export async function getDataset(datasetId) {
@@ -226,13 +231,19 @@ export async function deletePreset(name) {
   return apiFetch(`/api/configs/presets/${encodeURIComponent(name)}`, { method: 'DELETE' });
 }
 
-export async function startEvolutionWithPreset(presetName) {
+export async function startEvolutionWithPreset(presetName, overrides = {}) {
   const preset = await getPreset(presetName);
-  const cfg = preset?.config || preset;
+  const base = preset?.config && typeof preset.config === 'object' ? preset.config : {};
+  const cfg = { ...base, ...overrides };
   return apiFetch('/api/evolve/start', {
     method: 'POST',
     body: JSON.stringify(cfg),
   });
+}
+
+export async function fetchOllamaModelTags() {
+  const data = await apiFetch('/api/system/ollama-models');
+  return Array.isArray(data?.models) ? data.models : [];
 }
 
 export async function compareRuns(runIds) {

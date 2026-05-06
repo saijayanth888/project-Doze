@@ -1,7 +1,15 @@
 # ModelForge — single Compose file for Mac dev (cpu) and DGX Spark (gpu).
 #
 #   Mac dev:   docker compose up -d
-#   DGX Spark: docker compose --profile gpu up -d
+#   DGX Spark: docker compose --profile gpu up -d   # gpu profile = vLLM (+ optional container Ollama)
+#
+#   Ollama (inference): **No Docker Ollama container is required.** Typical Spark setup runs
+#   `ollama serve` via systemd on the host; set `OLLAMA_HOST=http://host.docker.internal:11434`
+#   in `.env` so the `api` container reaches host :11434 (`extra_hosts: host-gateway`).
+#   The optional `ollama` service below is only for users who want Ollama inside Compose.
+#
+#   The `api` service uses `runtime: nvidia`, `deploy` GPU reservations, and `ipc: host`
+#   on DGX Spark when you need GPU from the API process itself.
 #
 # n8n uses PostgreSQL (database `n8n`, same credentials as POSTGRES_USER).
 # Pass MODELFORGE_API_KEY into the n8n container so HTTP Request nodes can
@@ -77,6 +85,7 @@ services:
       - N8N_WEBHOOK_SECRET=${N8N_WEBHOOK_SECRET:-}
       - EVOLUTION_BASE_MODEL=${EVOLUTION_BASE_MODEL:-llama3.2:3b}
       - EVOLUTION_MAX_GENS=${EVOLUTION_MAX_GENS:-10}
+      - N8N_RESTRICT_ENVIRONMENT_VARIABLES=false
     volumes:
       - n8n_data:/home/node/.n8n
       # Bundled JSON for `n8n import:workflow` (see scripts/n8n-import-workflows-compose.sh).
@@ -100,13 +109,41 @@ services:
     image: modelforge-api:latest
     container_name: mf-api
     env_file: .env
+    runtime: nvidia
+    ipc: host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack:
+        soft: 67108864
+        hard: 67108864
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-modelforge}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-modelforge}
       REDIS_URL: redis://redis:6379
-      OLLAMA_HOST: http://ollama:11434
+      # Host Ollama: http://host.docker.internal:11434 (requires extra_hosts + Ollama listening on 0.0.0.0).
+      # Compose Ollama service: set OLLAMA_HOST=http://ollama:11434 in `.env` and `docker compose --profile gpu up`.
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
       VLLM_HOST: http://vllm:8000
       N8N_WEBHOOK_EVOLUTION_URL: "${N8N_WEBHOOK_EVOLUTION_URL:-http://n8n:5678/webhook/evolution-events}"
       N8N_WEBHOOK_SECRET: "${N8N_WEBHOOK_SECRET:-}"
+      NVIDIA_VISIBLE_DEVICES: all
+      # The image's `app` user has no writable HOME (`/home/app` is not created).
+      # Point all HF caches at the persistent data volume so model downloads don't
+      # fail with PermissionError on first run.
+      HF_HOME: /app/data/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /app/data/.cache/huggingface/hub
+      TRANSFORMERS_CACHE: /app/data/.cache/huggingface/hub
+      HF_DATASETS_CACHE: /app/data/.cache/huggingface/datasets
     expose:
       - "8000"
     ports:
@@ -153,6 +190,7 @@ services:
       retries: 3
     restart: unless-stopped
 
+  # Optional: containerized Ollama. Skip this if you use host systemd Ollama (`ollama serve`).
   ollama:
     image: ollama/ollama:latest
     container_name: mf-ollama

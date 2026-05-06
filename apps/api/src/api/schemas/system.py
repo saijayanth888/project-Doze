@@ -22,6 +22,8 @@ class GPUStatus(BaseModel):
     temp_celsius: float | None = None
     gpu_name: str | None = None
     note: str | None = None
+    inference_note: str | None = None
+    ollama_inference_ok: bool = False
 
 
 class EnvironmentInfo(BaseModel):

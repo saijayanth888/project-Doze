@@ -47,8 +47,8 @@ fi
 "${PYTHON}" "${ROOT}/scripts/n8n_bootstrap_owner.py" || true
 
 if [[ "${N8N_SKIP_WORKFLOW_IMPORT:-}" != "1" ]]; then
-  if [[ -x "${ROOT}/scripts/n8n-import-workflows-compose.sh" ]]; then
-    "${ROOT}/scripts/n8n-import-workflows-compose.sh" || true
+  if [[ -x "${ROOT}/scripts/n8n-import-all.sh" ]]; then
+    "${ROOT}/scripts/n8n-import-all.sh" || true
   fi
 fi
 

@@ -85,6 +85,8 @@ export default function SettingsPage() {
   const [showKey, setShowKey] = useState(false);
   const [saved, setSaved] = useState(false);
   const [connOk, setConnOk] = useState(null);
+  const [connections, setConnections] = useState(null);
+  const [connTesting, setConnTesting] = useState(false);
 
   useEffect(() => {
     if (!apiBase.trim()) {
@@ -135,17 +137,53 @@ export default function SettingsPage() {
     show('Reset to defaults (API key unchanged).', 'info');
   }, [show]);
 
-  const testConnection = useCallback(async () => {
+  const testConnections = useCallback(async () => {
     setConnOk(null);
+    setConnTesting(true);
     try {
-      await apiFetch('/api/system/status', {}, { timeoutMs: 8000 });
-      setConnOk(true);
-      show('API reachable.', 'success');
+      const n8nUrl = String(n8n || '').replace(/\/$/, '');
+
+      // Health-check DB/Redis/Ollama via API health
+      const h = await apiFetch('/api/system/health', {}, { timeoutMs: 8000 });
+      const apiOk = h?.status === 'ok';
+
+      const g = await apiFetch('/api/system/gpu', {}, { timeoutMs: 8000 });
+
+      let n8nOk = false;
+      try {
+        const r = await fetch(`${n8nUrl}/healthz`);
+        n8nOk = r.ok;
+      } catch {
+        n8nOk = false;
+      }
+
+      const next = {
+        api: { ok: apiOk, status: h?.status ?? 'unknown' },
+        postgres: { ok: h?.postgres === 'ok' },
+        redis: { ok: h?.redis === 'ok' },
+        ollama: { ok: h?.ollama === 'ok' },
+        gpu: { ok: !!g?.gpu_available, name: g?.gpu_name ?? null, temp: g?.temp_celsius ?? null },
+        n8n: { ok: n8nOk },
+      };
+
+      setConnections(next);
+      setConnOk(apiOk);
+      show(apiOk ? 'System health OK.' : 'System degraded.', apiOk ? 'success' : 'danger');
     } catch (e) {
+      setConnections({
+        api: { ok: false, status: e?.status ? `HTTP ${e.status}` : 'error' },
+        postgres: { ok: false },
+        redis: { ok: false },
+        ollama: { ok: false },
+        gpu: { ok: false },
+        n8n: { ok: false },
+      });
       setConnOk(false);
       show(`Connection failed: ${e?.message || e}`, 'danger');
+    } finally {
+      setConnTesting(false);
     }
-  }, [show]);
+  }, [n8n, show]);
 
   return (
     <div style={{ maxWidth: 760, margin: '0 auto' }}>
@@ -254,8 +292,8 @@ export default function SettingsPage() {
         <Button variant="ghost" onClick={resetDefaults}>
           <RotateCcw size={14} aria-hidden /> Reset
         </Button>
-        <Button variant="secondary" onClick={testConnection}>
-          Test connection
+        <Button variant="secondary" onClick={testConnections} disabled={connTesting}>
+          {connTesting ? 'Testing…' : 'Test Connections'}
         </Button>
         <Button variant="primary" onClick={save}>
           {saved ? 'Saved' : 'Save settings'}
@@ -263,6 +301,84 @@ export default function SettingsPage() {
       </div>
       {connOk === true ? <p style={{ textAlign: 'right', fontSize: 12, color: C.success, marginTop: 8 }}>Last test: OK</p> : null}
       {connOk === false ? <p style={{ textAlign: 'right', fontSize: 12, color: C.danger, marginTop: 8 }}>Last test: failed</p> : null}
+
+      {connections ? (
+        <div
+          style={{
+            marginTop: 16,
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 12,
+          }}
+        >
+          {[
+            {
+              key: 'api',
+              label: 'API',
+              ok: connections.api.ok,
+              detail: connections.api.status,
+              accent: C.success,
+            },
+            {
+              key: 'postgres',
+              label: 'DB',
+              ok: connections.postgres.ok,
+              detail: connections.postgres.ok ? 'ok' : 'unreachable',
+              accent: C.success,
+            },
+            {
+              key: 'redis',
+              label: 'Redis',
+              ok: connections.redis.ok,
+              detail: connections.redis.ok ? 'ok' : 'unreachable',
+              accent: C.success,
+            },
+            {
+              key: 'ollama',
+              label: 'Ollama',
+              ok: connections.ollama.ok,
+              detail: connections.ollama.ok ? 'ok' : 'unreachable',
+              accent: C.success,
+            },
+            {
+              key: 'gpu',
+              label: 'GPU',
+              ok: connections.gpu.ok,
+              detail: connections.gpu.ok
+                ? `${connections.gpu.name ?? 'GPU'} · ${connections.gpu.temp != null ? `${Math.round(connections.gpu.temp)}°C` : '—'}`
+                : 'unavailable',
+              accent: C.success,
+            },
+            {
+              key: 'n8n',
+              label: 'n8n',
+              ok: connections.n8n.ok,
+              detail: connections.n8n.ok ? 'ok' : 'check port',
+              accent: C.warning,
+            },
+          ].map((s) => (
+            <div
+              key={s.key}
+              className="mf-card-hover"
+              style={{
+                flex: '1 1 180px',
+                minWidth: 180,
+                background: C.bgC,
+                border: `1px solid ${s.ok ? 'rgba(34,197,94,0.35)' : 'rgba(239,68,68,0.35)'}`,
+                borderRadius: 10,
+                padding: 14,
+              }}
+            >
+              <div style={{ fontFamily: F.ui, fontSize: 12, color: C.txtM, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                {s.ok ? '✅' : s.key === 'n8n' ? '⚠️' : '❌'} {s.label}
+              </div>
+              <div style={{ fontFamily: F.mono, fontSize: 13, color: s.ok ? C.acc : C.danger, marginTop: 8, lineHeight: 1.4 }}>
+                {s.detail}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

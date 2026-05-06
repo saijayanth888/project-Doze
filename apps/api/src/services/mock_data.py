@@ -270,4 +270,6 @@ def mock_gpu_status() -> dict:
         "device": "cpu",
         "cuda_available": False,
         "note": "Mock GPU status — no CUDA device detected",
+        "inference_note": None,
+        "ollama_inference_ok": False,
     }

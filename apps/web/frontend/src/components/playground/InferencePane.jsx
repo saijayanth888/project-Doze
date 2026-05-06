@@ -1,9 +1,20 @@
 import { useState, useEffect, useRef } from 'react';
+
+const INFERENCE_STORAGE_KEY = 'mf.playground.inference.v1';
 import { RotateCcw, Zap, Trophy, Save } from 'lucide-react';
 import { apiFetch, fetchAdapters, fetchDatasets, savePairToDataset, serveAdapter } from '../../config/api';
 import { C, F } from '../../config/colors';
 import DNALoader from '../shared/DNALoader';
 import MagneticButton from '../shared/MagneticButton';
+
+/** Ollama `model` param must be a local tag, not a HuggingFace repo id. */
+function ollamaBaseTagFromRegistryBase(base) {
+  const s = (base && String(base).trim()) || '';
+  if (!s) return 'llama3.2:3b';
+  // Typical HF ids: org/model — Ollama expects e.g. llama3.2:3b
+  if (s.includes('/') && !s.includes(':')) return 'llama3.2:3b';
+  return s;
+}
 
 const EXAMPLE_PROMPTS = [
   'Explain quantum entanglement in simple terms.',
@@ -36,23 +47,55 @@ function TypewriterText({ text, speed = 20 }) {
   );
 }
 
-const MOCK_RESPONSES = {
-  base: 'This is a response from the base model.',
-  champion: 'This is the champion / selected adapter response.',
-};
-
 export default function InferencePane() {
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [responses, setResponses] = useState({ base: '', champion: '' });
   const [meta, setMeta] = useState({ base: null, champion: null });
   const [submitted, setSubmitted] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   const [adapters, setAdapters] = useState([]);
   const [datasets, setDatasets] = useState([]);
   const [adapterId, setAdapterId] = useState('');
   const [saveDs, setSaveDs] = useState('');
   const [badge, setBadge] = useState('');
+  /** Ollama tag for the promoted champion (from `/api/models/champion`). */
+  const [championBase, setChampionBase] = useState('');
   const textareaRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(INFERENCE_STORAGE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        if (typeof saved.prompt === 'string') setPrompt(saved.prompt);
+        if (saved.responses && typeof saved.responses === 'object') {
+          setResponses({
+            base: String(saved.responses.base ?? ''),
+            champion: String(saved.responses.champion ?? ''),
+          });
+        }
+        if (saved.meta && typeof saved.meta === 'object') setMeta(saved.meta);
+        if (typeof saved.submitted === 'boolean') setSubmitted(saved.submitted);
+        if (typeof saved.adapterId === 'string') setAdapterId(saved.adapterId);
+      }
+    } catch {
+      /* ignore */
+    }
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      sessionStorage.setItem(
+        INFERENCE_STORAGE_KEY,
+        JSON.stringify({ prompt, responses, meta, submitted, adapterId })
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [hydrated, prompt, responses, meta, submitted, adapterId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,6 +137,20 @@ export default function InferencePane() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch('/api/models/champion')
+      .then((c) => {
+        if (cancelled || !c) return;
+        const bm = c.base_model || c.name;
+        if (bm) setChampionBase(String(bm));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function handleSubmit() {
     if (!prompt.trim() || loading) return;
     setLoading(true);
@@ -111,14 +168,20 @@ export default function InferencePane() {
         targetId = fresh?.champion_id;
       }
 
+      const baseModel = ollamaBaseTagFromRegistryBase(championBase);
+
       if (targetId) {
         const served = await serveAdapter(targetId);
         const sel = adapters.find((x) => x.adapter_id === targetId);
-        modelBTag = served?.ollama_model || sel?.base_model || 'llama3.2:3b';
+        // Ollama can only serve local tags. If the adapter has not been served as
+        // an Ollama model, fall back to the resolved base tag so the champion pane
+        // doesn't trip into the mock branch with an HF repo id like
+        // `meta-llama/Llama-3.2-3B-Instruct`.
+        modelBTag = served?.ollama_model
+          || ollamaBaseTagFromRegistryBase(sel?.base_model)
+          || baseModel;
         setBadge(targetId);
       }
-
-      const baseModel = 'llama3.2:3b';
 
       const result = await apiFetch('/api/infer/compare', {
         method: 'POST',
@@ -133,8 +196,8 @@ export default function InferencePane() {
 
       if (result?.base && result?.champion) {
         setResponses({
-          base: result.base.response || MOCK_RESPONSES.base,
-          champion: result.champion.response || MOCK_RESPONSES.champion,
+          base: result.base.response ?? '',
+          champion: result.champion.response ?? '',
         });
         setMeta({
           base: result.base,
@@ -142,8 +205,8 @@ export default function InferencePane() {
         });
       } else {
         setResponses({
-          base: MOCK_RESPONSES.base,
-          champion: MOCK_RESPONSES.champion,
+          base: 'No response returned from the API.',
+          champion: 'No response returned from the API.',
         });
       }
       setSubmitted(true);
@@ -187,8 +250,13 @@ export default function InferencePane() {
           borderRadius: 8,
         }}
       >
-        <div style={{ fontFamily: F.mono, fontSize: 11, color: C.txtM }}>
-          Model info: <span style={{ color: C.acc }}>{badge || '—'}</span>
+        <div style={{ fontFamily: F.mono, fontSize: 11, color: C.txtM, lineHeight: 1.5 }}>
+          <div>
+            Base model: <span style={{ color: C.acc }}>{championBase || '—'}</span>
+          </div>
+          <div style={{ marginTop: 2 }}>
+            Adapter: <span style={{ color: C.acc }}>{badge || 'champion (default)'}</span>
+          </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <label style={{ fontSize: 11, color: C.txtM, fontFamily: F.ui }}>Adapter</label>

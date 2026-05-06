@@ -131,7 +131,12 @@ class LoRATrainingBackend:
                 except Exception:
                     pass
 
-        base_model = str(config.get("base_model") or "meta-llama/Llama-3.1-8B-Instruct")
+        from utils.hf_model_id import resolve_hf_base_model_id
+
+        raw_bm = config.get("base_model")
+        base_model = resolve_hf_base_model_id(
+            str(raw_bm).strip() if raw_bm else None,
+        )
         dr = settings.resolve_data_root()
         output_dir = str(dr / "adapters" / run_id / f"gen-{generation}")
         os.makedirs(output_dir, exist_ok=True)
@@ -189,7 +194,7 @@ class LoRATrainingBackend:
 
         trainer = SFTTrainer(
             model=model,
-            tokenizer=tokenizer,
+            processing_class=tokenizer,
             args=args,
             train_dataset=dataset,
             dataset_text_field="text",

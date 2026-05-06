@@ -17,24 +17,10 @@ import {
   uploadDataset,
 } from '../config/api';
 
-const MOCK_LIST = {
-  datasets: [
-    {
-      dataset_id: 'gen-1',
-      generation: 1,
-      num_samples: 800,
-      categories: ['mmlu'],
-      sources: ['huggingface'],
-      size_mb: 12,
-      kind: 'curated',
-    },
-  ],
-  total: 1,
-};
-
 export default function DatasetsPage() {
   const [list, setList] = useState(null);
   const [warn, setWarn] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [preview, setPreview] = useState(null);
   const [quality, setQuality] = useState(null);
@@ -42,14 +28,17 @@ export default function DatasetsPage() {
   const [uploading, setUploading] = useState(false);
 
   const loadList = useCallback(async () => {
+    setLoading(true);
     try {
       const d = await fetchDatasets();
       setList(d);
       setWarn(null);
-    } catch {
-      setList(MOCK_LIST);
-      setWarn('API unavailable — mock list');
+    } catch (e) {
+      setList({ datasets: [], total: 0 });
+      const st = e?.status;
+      setWarn(st === 401 || st === 403 ? 'API key not configured — check Settings.' : 'Could not load datasets — check API connectivity.');
     }
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -123,7 +112,26 @@ export default function DatasetsPage() {
             marginBottom: 16,
           }}
         >
-          {warn}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <span>{warn}</span>
+            <button
+              type="button"
+              onClick={loadList}
+              style={{
+                padding: '6px 10px',
+                borderRadius: 6,
+                border: `1px solid ${C.border}`,
+                background: C.bgE,
+                color: C.txtS,
+                cursor: 'pointer',
+                fontFamily: F.ui,
+                fontSize: 12,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Retry
+            </button>
+          </div>
         </div>
       )}
 
@@ -148,7 +156,7 @@ export default function DatasetsPage() {
         <div style={{ fontFamily: F.ui, color: C.txtS, marginBottom: 12 }}>
           Drop JSONL here or{' '}
           <label style={{ color: C.acc, cursor: 'pointer' }}>
-            browse
+            Upload Dataset
             <input
               type="file"
               accept=".jsonl,.json"
@@ -180,50 +188,57 @@ export default function DatasetsPage() {
             DATASETS ({ds.length})
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {ds.map((d) => (
-              <button
-                key={d.dataset_id}
-                type="button"
-                onClick={() => openDataset(d.dataset_id)}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: '12px 14px',
-                  background: selected === d.dataset_id ? C.bgE : C.bgS,
-                  border: `1px solid ${selected === d.dataset_id ? C.acc : C.border}`,
-                  borderRadius: 8,
-                  cursor: 'pointer',
-                  color: C.txtP,
-                  fontFamily: F.ui,
-                  fontSize: 13,
-                  textAlign: 'left',
-                }}
-              >
-                <span>
-                  <span style={{ fontFamily: F.mono, color: C.acc }}>{d.dataset_id}</span>
-                  <span style={{ color: C.txtM, marginLeft: 8, fontSize: 11 }}>{d.kind}</span>
-                  <div style={{ fontSize: 11, color: C.txtM, marginTop: 4 }}>
-                    {d.num_samples} samples · {Number(d.size_mb || 0).toFixed(2)} MB
-                  </div>
-                </span>
-                {d.kind === 'custom' && (
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      if (window.confirm('Delete this dataset?'))
-                        deleteDataset(d.dataset_id).then(loadList);
-                    }}
-                    onKeyDown={() => {}}
-                    style={{ color: C.danger }}
-                  >
-                    <Trash2 size={16} />
+            {loading ? (
+              <div style={{ padding: 10, fontFamily: F.ui, fontSize: 13, color: C.txtM }}>Loading datasets…</div>
+            ) : ds.length === 0 ? (
+              <div style={{ padding: 10, fontFamily: F.ui, fontSize: 13, color: C.txtM, lineHeight: 1.4 }}>
+                No datasets yet — datasets are created during evolution or uploaded manually.
+              </div>
+            ) : (
+              ds.map((d) => (
+                <button
+                  key={d.dataset_id}
+                  type="button"
+                  onClick={() => openDataset(d.dataset_id)}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '12px 14px',
+                    background: selected === d.dataset_id ? C.bgE : C.bgS,
+                    border: `1px solid ${selected === d.dataset_id ? C.acc : C.border}`,
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    color: C.txtP,
+                    fontFamily: F.ui,
+                    fontSize: 13,
+                    textAlign: 'left',
+                  }}
+                >
+                  <span>
+                    <span style={{ fontFamily: F.mono, color: C.acc }}>{d.dataset_id}</span>
+                    <span style={{ color: C.txtM, marginLeft: 8, fontSize: 11 }}>{d.kind}</span>
+                    <div style={{ fontSize: 11, color: C.txtM, marginTop: 4 }}>
+                      {d.num_samples} samples · {Number(d.size_mb || 0).toFixed(2)} MB
+                    </div>
                   </span>
-                )}
-              </button>
-            ))}
+                  {d.kind === 'custom' && (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        if (window.confirm('Delete this dataset?')) deleteDataset(d.dataset_id).then(loadList);
+                      }}
+                      onKeyDown={() => {}}
+                      style={{ color: C.danger }}
+                    >
+                      <Trash2 size={16} />
+                    </span>
+                  )}
+                </button>
+              ))
+            )}
           </div>
         </div>
 

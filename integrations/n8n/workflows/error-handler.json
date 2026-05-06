@@ -48,7 +48,7 @@
             },
             {
               "name": "X-API-Key",
-              "value": "={{ $env.MODELFORGE_API_KEY }}"
+              "value": "pAuhGy_kTkDowUta8Zo0_komj41RU-q7nMFQG6womEY"
             }
           ]
         },

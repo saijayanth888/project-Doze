@@ -37,7 +37,7 @@ test.describe("app shell", () => {
   test("Start Evolution in sidebar goes to dashboard", async ({ page }) => {
     await page.goto("/benchmarks");
     await page.getByRole("button", { name: "Start Evolution" }).click();
-    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page).toHaveURL(/\/dashboard(\?|$)/);
   });
 
   test("champion card routes", async ({ page }) => {
@@ -49,9 +49,9 @@ test.describe("app shell", () => {
     await expect(page).toHaveURL(/\/lineage$/);
   });
 
-  test("View Logs scrolls to activity", async ({ page }) => {
+  test("View activity scrolls to activity", async ({ page }) => {
     await page.goto("/dashboard");
-    await page.getByRole("button", { name: "View Logs" }).click();
+    await page.getByRole("button", { name: "View activity" }).click();
     await expect(page.locator("#activity-feed")).toBeVisible();
   });
 });

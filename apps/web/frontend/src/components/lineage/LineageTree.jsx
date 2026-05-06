@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useMemo, useCallback } from 'react';
+import { C, F } from '../../config/colors';
 import LineageNode from './LineageNode';
 
 const W = 120;
@@ -142,8 +143,9 @@ export default function LineageTree({
           padding: 24,
         }}
       >
-        <p style={{ fontFamily: 'DM Sans, system-ui, sans-serif', fontSize: 14, color: '#64748b', textAlign: 'center', maxWidth: 360, margin: 0 }}>
-          No lineage yet — evolution generations will appear here after your first run.
+        <p style={{ fontFamily: F.ui, fontSize: 13, color: C.txtM, textAlign: 'center', maxWidth: 440, margin: 0, lineHeight: 1.55 }}>
+          No lineage in the database yet. After evolution runs complete with Postgres connected, nodes and edges appear here. If you expect data,
+          confirm the API uses the same database volume as your stack (Settings → Test Connections).
         </p>
       </div>
     );
