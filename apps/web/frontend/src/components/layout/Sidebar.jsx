@@ -10,6 +10,7 @@ import {
   Bot,
   Dna,
   Compass,
+  History,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
@@ -27,6 +28,7 @@ const NAV = [
   { id: 'forge', path: '/forge', label: 'ForgeAgent', icon: Compass },
   { id: 'ept', path: '/ept', label: 'Population (EPT)', icon: Dna },
   { id: 'automation', path: '/automation', label: 'Automation', icon: Bot },
+  { id: 'history', path: '/history', label: 'Run History', icon: History },
   { id: 'settings', path: '/settings', label: 'Settings', icon: Settings2 },
 ];
 

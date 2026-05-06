@@ -12,6 +12,7 @@ const PlaygroundPage = lazy(() => import('./pages/PlaygroundPage'));
 const ForgeAgentPage = lazy(() => import('./pages/ForgeAgentPage'));
 const AutomationPage = lazy(() => import('./pages/AutomationPage'));
 const EPTPage = lazy(() => import('./pages/EPTPage'));
+const HistoryPage = lazy(() => import('./pages/HistoryPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 
 function PageFallback() {
@@ -48,6 +49,7 @@ export default function App() {
             <Route path="/forge" element={<ForgeAgentPage />} />
             <Route path="/ept" element={<EPTPage />} />
             <Route path="/automation" element={<AutomationPage />} />
+            <Route path="/history" element={<HistoryPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
         </Routes>

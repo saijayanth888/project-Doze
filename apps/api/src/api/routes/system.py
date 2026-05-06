@@ -126,6 +126,96 @@ async def ingest_n8n_alert(payload: N8nAlertIn) -> dict:
     return {"status": "accepted", "alert_type": payload.alert_type}
 
 
+@router.get("/storage")
+async def storage_usage() -> dict:
+    """Walk the data root and report usage per top-level category.
+
+    Buckets:
+      - adapters         (data/adapters/<run>/gen-N/)
+      - curated          (data/curated/gen-N/)
+      - ept              (data/ept/<run>/)
+      - hf_cache         (data/.cache/huggingface/)
+      - registry         (data/registry.json + small leaf files)
+
+    Returns per-bucket size + file count, plus a `total_bytes` and
+    `total_human` for the whole data root. Walks each bucket in a thread
+    so we don't block the event loop on large directories.
+    """
+    from pathlib import Path
+
+    def _scan(path: Path) -> tuple[int, int]:
+        total_bytes = 0
+        total_files = 0
+        if not path.exists():
+            return 0, 0
+        if path.is_file():
+            try:
+                return path.stat().st_size, 1
+            except OSError:
+                return 0, 0
+        for f in path.rglob("*"):
+            try:
+                if f.is_file():
+                    total_bytes += f.stat().st_size
+                    total_files += 1
+            except OSError:
+                pass
+        return total_bytes, total_files
+
+    def _human(b: int) -> str:
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if b < 1024:
+                return f"{b:.1f} {unit}"
+            b /= 1024
+        return f"{b:.1f} PB"
+
+    data_root = Path(settings.resolve_data_root())
+    buckets = {
+        "adapters": data_root / "adapters",
+        "curated":  data_root / "curated",
+        "ept":      data_root / "ept",
+        "hf_cache": data_root / ".cache",
+        "registry": data_root / "registry.json",
+    }
+
+    loop = asyncio.get_running_loop()
+    results: dict[str, dict] = {}
+    total = 0
+    files = 0
+    for name, p in buckets.items():
+        size, n = await loop.run_in_executor(None, _scan, p)
+        results[name] = {
+            "path": str(p),
+            "exists": p.exists(),
+            "bytes": int(size),
+            "human": _human(size),
+            "files": int(n),
+        }
+        total += size
+        files += n
+
+    # Free disk inspection — best-effort.
+    try:
+        st = await loop.run_in_executor(None, lambda: __import__("shutil").disk_usage(str(data_root)))
+        free_bytes = int(st.free)
+        total_bytes_disk = int(st.total)
+    except Exception:
+        free_bytes = None
+        total_bytes_disk = None
+
+    return {
+        "data_root": str(data_root),
+        "buckets": results,
+        "total_bytes": int(total),
+        "total_human": _human(total),
+        "total_files": int(files),
+        "free_bytes": free_bytes,
+        "total_disk_bytes": total_bytes_disk,
+        "free_human": _human(free_bytes) if free_bytes is not None else None,
+        "total_disk_human": _human(total_bytes_disk) if total_bytes_disk is not None else None,
+    }
+
+
 @router.get("/env", response_model=EnvironmentInfo)
 async def environment_info() -> EnvironmentInfo:
     gpu_data = get_gpu_status()

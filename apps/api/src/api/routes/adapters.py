@@ -445,6 +445,70 @@ async def rollback_adapter(
     )
 
 
+@router.post("/{adapter_id}/promote_to_track")
+async def promote_adapter_to_track(
+    adapter_id: str,
+    body: dict | None = None,
+    db: LineageDB = Depends(get_db),
+) -> dict:
+    """Manual override — promote ``adapter_id`` into the named track.
+
+    Lights up the PEFT inference path on /forge for that track. Bypasses the
+    auto-promotion's "must beat current track champion on target benches"
+    rule — useful for ablation work or when you know better than the metric.
+
+    Body: ``{"track_id": "math"}``
+    """
+    track_id = str((body or {}).get("track_id") or "").strip()
+    if not track_id:
+        raise HTTPException(status_code=400, detail="track_id required in body")
+    track = await db.get_track(track_id)
+    if not track:
+        raise HTTPException(status_code=404, detail=f"unknown track {track_id!r}")
+
+    run_id, gen = _parse_adapter_id(adapter_id)
+    root = settings.resolve_data_root() / "adapters" / run_id / f"gen-{gen}"
+    if not root.is_dir():
+        raise HTTPException(status_code=404, detail="adapter dir missing on disk")
+    row = await db.get_generation(run_id, gen)
+    if not row:
+        raise HTTPException(status_code=404, detail="generation metadata missing")
+
+    cs = row.get("child_scores") or {}
+    if isinstance(cs, str):
+        try:
+            cs = json.loads(cs)
+        except json.JSONDecodeError:
+            cs = {}
+    scores = {str(k): float(v) for k, v in cs.items()} if isinstance(cs, dict) else {}
+
+    await db.update_track_champion(
+        track_id,
+        run_id=run_id,
+        generation=gen,
+        adapter_path=str(root),
+        scores=scores,
+    )
+    try:
+        await db.insert_track_generation({
+            "track_id": track_id,
+            "generation": gen,
+            "run_id": run_id,
+            "scores": scores,
+            "promoted": True,
+            "adapter_path": str(root),
+        })
+    except Exception:
+        pass
+    return {
+        "promoted": True,
+        "track_id": track_id,
+        "track_name": track.get("name"),
+        "adapter_id": adapter_id,
+        "scores": scores,
+    }
+
+
 @router.post("/{adapter_id}/serve", response_model=ServeAdapterResponse)
 async def serve_adapter(
     adapter_id: str,

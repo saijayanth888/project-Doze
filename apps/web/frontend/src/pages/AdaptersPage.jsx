@@ -4,6 +4,7 @@ import {
   ArrowDownToLine,
   ChevronDown,
   ChevronRight,
+  Compass,
   Crown,
   GitCompare,
   Layers,
@@ -11,6 +12,7 @@ import {
   Plus,
   RotateCcw,
   Server,
+  Target,
   Trash2,
   X,
 } from 'lucide-react';
@@ -186,6 +188,109 @@ function ActionButton({ icon: Icon, label, onClick, variant = 'ghost', danger, d
       <Icon size={13} />
       {label}
     </button>
+  );
+}
+
+function PromoteToTrackControl({ adapterId, disabled, onPromoted }) {
+  const [tracks, setTracks] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState('');
+
+  useEffect(() => {
+    if (!open || tracks.length > 0) return;
+    setLoading(true);
+    apiFetch('/api/forge/tracks')
+      .then((r) => setTracks(r?.tracks || []))
+      .finally(() => setLoading(false));
+  }, [open, tracks.length]);
+
+  // Close on outside click.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (!e.target.closest('[data-promote-track-popover]')) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  async function promote(track) {
+    setBusy(track.track_id);
+    try {
+      const r = await apiFetch(`/api/adapters/${adapterId}/promote_to_track`, {
+        method: 'POST',
+        body: JSON.stringify({ track_id: track.track_id }),
+      });
+      onPromoted?.(track, r);
+      setOpen(false);
+    } catch (e) {
+      alert(`Promote failed: ${e?.message || 'unknown'}`);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  return (
+    <div data-promote-track-popover style={{ position: 'relative' }}>
+      <ActionButton
+        icon={Compass}
+        label="Promote to track"
+        onClick={() => setOpen(!open)}
+        disabled={disabled}
+      />
+      {open ? (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0,
+          background: C.bgC, border: `1px solid ${C.border}`,
+          borderRadius: 6, padding: 4, minWidth: 240, zIndex: 100,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+        }}>
+          {loading ? (
+            <div style={{ padding: 10, fontFamily: F.ui, fontSize: 11, color: C.txtM, textAlign: 'center' }}>
+              Loading tracks…
+            </div>
+          ) : tracks.filter((t) => t.enabled).length === 0 ? (
+            <div style={{ padding: 10, fontFamily: F.ui, fontSize: 11, color: C.txtM, textAlign: 'center' }}>
+              No enabled tracks.
+            </div>
+          ) : (
+            tracks.filter((t) => t.enabled).map((t) => (
+              <button
+                key={t.track_id}
+                type="button"
+                onClick={() => promote(t)}
+                disabled={!!busy}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  width: '100%', textAlign: 'left',
+                  padding: '7px 10px', borderRadius: 4,
+                  background: 'transparent', border: 'none', cursor: busy ? 'wait' : 'pointer',
+                  opacity: busy === t.track_id ? 0.5 : 1,
+                }}
+                onMouseEnter={(e) => { if (!busy) e.currentTarget.style.background = C.bgI; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              >
+                <Target size={12} color={C.acc} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: F.ui, fontSize: 12, color: C.txtP, fontWeight: 600 }}>
+                    {t.name}
+                  </div>
+                  <div style={{ fontFamily: F.mono, fontSize: 10, color: C.txtM }}>
+                    {t.track_id} · {(t.target_benchmarks || []).join(', ')}
+                  </div>
+                </div>
+                {t.has_adapter ? (
+                  <span style={{ fontFamily: F.mono, fontSize: 9, color: C.acc, padding: '1px 5px', borderRadius: 999, background: C.accDim, border: `1px solid ${C.borderA}` }}>
+                    has adapter
+                  </span>
+                ) : null}
+              </button>
+            ))
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -496,6 +601,17 @@ function DetailPane({ row, lineageRow, onServe, onMakeChampion, onDelete, onAddC
           disabled={row.is_champion || noWeights || busy === `${row.adapter_id}:rb`}
         />
         <ActionButton icon={GitCompare} label="Add to Compare" onClick={() => onAddCompare(row)} disabled={noWeights} />
+        <PromoteToTrackControl
+          adapterId={row.adapter_id}
+          disabled={noWeights}
+          onPromoted={(track) => {
+            // Lightweight in-place feedback. AdaptersPage doesn't reload tracks
+            // since it doesn't display them; the user navigates to /forge to see
+            // the promotion take effect.
+            // eslint-disable-next-line no-console
+            console.log('[adapters] promoted', row.adapter_id, '→ track', track.track_id);
+          }}
+        />
         <ActionButton icon={ArrowDownToLine} label="Report" onClick={() => downloadAdapterReport(row)} />
         <ActionButton
           icon={Trash2}

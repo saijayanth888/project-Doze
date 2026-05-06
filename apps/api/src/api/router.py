@@ -11,9 +11,11 @@ from api.routes import (
     experiments,
     exports,
     forge,
+    history,
     inference,
     lineage,
     models,
+    schedule,
     system,
     websocket,
     workflows,
@@ -35,4 +37,6 @@ api_router.include_router(experiments.router, prefix="/experiments", tags=["Expe
 api_router.include_router(exports.router, prefix="/export", tags=["Exports"])
 api_router.include_router(ept.router, prefix="/ept", tags=["EPT"])
 api_router.include_router(forge.router, prefix="/forge", tags=["ForgeAgent"])
+api_router.include_router(history.router, prefix="/history", tags=["History"])
+api_router.include_router(schedule.router, prefix="/schedule", tags=["Schedule"])
 api_router.include_router(websocket.router, tags=["WebSocket"])
