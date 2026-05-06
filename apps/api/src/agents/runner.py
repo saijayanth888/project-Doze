@@ -32,6 +32,7 @@ from services.data_curator import (
     HuggingFaceDataCurator,
     MockDataCurator,
 )
+from services import run_events
 from services.lineage_db import LineageDB
 from services.model_registry import ModelRegistry
 from services.n8n_webhook import (
@@ -84,6 +85,15 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
         eval_backend.name,
         getattr(curator, "name", "unknown"),
         prefer_real,
+    )
+    # Wipe any stale buffer from a previous run with the same id (re-runs after
+    # a stop/restart) so the events panel shows a clean timeline.
+    run_events.reset_run(run_id)
+    run_events.publish(
+        run_id,
+        phase="init",
+        label=f"Run {run_id} started",
+        sub=f"training={training.name} · eval={eval_backend.name} · curator={getattr(curator, 'name', '?')} · gpu={prefer_real}",
     )
 
     state: EvolutionState = {
@@ -258,7 +268,20 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
             final.get("generation"),
             final.get("champion_avg", 0.0),
         )
+        run_events.publish(
+            run_id,
+            phase="init",
+            label=f"Run finished — last gen {final.get('generation')}",
+            sub=f"champion avg {final.get('champion_avg', 0.0):.4f}",
+        )
     except Exception as exc:
+        run_events.publish(
+            run_id,
+            phase="error",
+            level="error",
+            label=f"Run failed: {type(exc).__name__}",
+            sub=str(exc)[:300],
+        )
         logger.exception("[evolution %s] failed", run_id)
         await db.update_run_status(
             run_id,

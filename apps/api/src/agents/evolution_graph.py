@@ -41,6 +41,7 @@ from langgraph.graph import END, StateGraph
 
 from agents.eval_backend import EvalBackend, EvalResult
 from agents.training_backend import TrainingBackend, TrainingResult
+from services import run_events
 from services.data_curator import CurationResult, DataCuratorBackend
 
 logger = logging.getLogger("modelforge.agents.graph")
@@ -97,18 +98,52 @@ def build_graph(
             except Exception as exc:
                 logger.warning("on_state_change(%s) failed: %s", step, exc)
 
+    def _phase_start(state: EvolutionState, *, phase: str, label: str, sub: str | None = None) -> None:
+        """Publish a 'phase started' event to the in-process event buffer.
+
+        Pure synchronous best-effort — never raises, never blocks. Lets the UI
+        flip from "training" to "evaluating" the moment the eval node begins,
+        instead of 3 hours later when it ends.
+        """
+        try:
+            run_events.publish(
+                state.get("run_id", ""),
+                phase=phase,
+                label=label,
+                sub=sub,
+                generation=state.get("generation"),
+            )
+        except Exception:
+            pass
+
     # ── Nodes ────────────────────────────────────────────────────
     async def init_run(state: EvolutionState) -> EvolutionState:
         state["generation"] = state.get("generation", 0) + 1
         state["decision"] = ""
         state["decision_reason"] = ""
         state["error"] = None
+        cfg = state.get("config", {}) or {}
+        _phase_start(
+            state,
+            phase="init",
+            label=f"Generation {state['generation']} starting",
+            sub=f"base={cfg.get('base_model')} · LoRA r={cfg.get('lora_rank')} · max_samples={cfg.get('max_samples')}",
+        )
         await _emit(state, "init_run")
         return state
 
     async def identify_weaknesses(state: EvolutionState) -> EvolutionState:
         """Analyze parent scores to decide which benchmarks to target next."""
         parent_scores = state.get("parent_scores", {})
+        _phase_start(
+            state,
+            phase="identify",
+            label="Identifying weaknesses",
+            sub=(
+                "no parent scores — broad training" if not parent_scores
+                else f"comparing {len(parent_scores)} benchmark scores"
+            ),
+        )
 
         if not parent_scores:
             # First generation — no data yet, train broadly
@@ -167,25 +202,56 @@ def build_graph(
         logger.info("[training-data] targeting %d categories: %s", len(weak), weak)
 
         max_samples = int((state.get("config") or {}).get("max_samples") or 3000)
+        _phase_start(
+            state,
+            phase="curate",
+            label="Curating training data",
+            sub=f"targeting {len(weak)} categories · budget {max_samples} samples",
+        )
+        # Inject run_id into the config so the curator can publish per-dataset
+        # progress events under the correct buffer key.
+        cfg_for_curate = {**(state.get("config", {}) or {}), "run_id": state.get("run_id", "")}
         try:
             result: CurationResult = await curator.curate(
                 weak_categories=weak,
                 weakness_report=report,
                 generation=int(state.get("generation", 0) or 0),
                 max_samples=max_samples,
-                config=state.get("config", {}) or {},
+                config=cfg_for_curate,
             )
             state["training_data_path"] = result.data_path
             state["training_data_size"] = int(result.num_samples)
+            run_events.publish(
+                state.get("run_id", ""),
+                phase="curate",
+                label=f"Curation complete — {result.num_samples} samples",
+                sub=f"sources: {', '.join(result.sources or [])[:200]}",
+                generation=state.get("generation"),
+            )
         except Exception as exc:
             logger.warning("[training-data] curator failed: %s", exc)
             state["training_data_path"] = None
+            run_events.publish(
+                state.get("run_id", ""),
+                phase="curate",
+                level="error",
+                label="Curation failed",
+                sub=str(exc)[:300],
+                generation=state.get("generation"),
+            )
         await _emit(state, "generate_training")
         return state
 
     async def train_adapter(state: EvolutionState) -> EvolutionState:
         if state.get("cancelled"):
             return state
+        cfg = state.get("config", {}) or {}
+        _phase_start(
+            state,
+            phase="train",
+            label=f"Training LoRA adapter (gen {state['generation']})",
+            sub=f"base={cfg.get('base_model')} · batch={cfg.get('batch_size')} · LR={cfg.get('learning_rate')}",
+        )
         t0 = time.perf_counter()
         result: TrainingResult = await training.train(
             run_id=state["run_id"],
@@ -196,12 +262,25 @@ def build_graph(
         state["method"] = result.method
         state["training_data_size"] = result.training_data_size
         state["training_seconds"] = result.duration_seconds or (time.perf_counter() - t0)
+        run_events.publish(
+            state.get("run_id", ""),
+            phase="train",
+            label=f"Training complete in {state['training_seconds']:.1f}s",
+            sub=f"adapter saved to {result.adapter_path}",
+            generation=state.get("generation"),
+        )
         await _emit(state, "train_adapter")
         return state
 
     async def evaluate(state: EvolutionState) -> EvolutionState:
         if state.get("cancelled"):
             return state
+        _phase_start(
+            state,
+            phase="eval",
+            label="Evaluating across benchmarks",
+            sub="lm-eval mmlu · arc_challenge · hellaswag · gsm8k · humaneval",
+        )
         t0 = time.perf_counter()
         result: EvalResult = await eval_backend.evaluate(
             run_id=state["run_id"],
@@ -211,10 +290,32 @@ def build_graph(
         )
         state["child_scores"] = result.scores
         state["eval_seconds"] = result.duration_seconds or (time.perf_counter() - t0)
+        # Per-benchmark recap so the user sees the exact scores in the events
+        # feed without leaving the dashboard.
+        for bench, score in (result.scores or {}).items():
+            run_events.publish(
+                state.get("run_id", ""),
+                phase="eval",
+                label=f"{bench} → {float(score):.3f}",
+                metric={"benchmark": bench, "score": float(score)},
+                generation=state.get("generation"),
+            )
+        run_events.publish(
+            state.get("run_id", ""),
+            phase="eval",
+            label=f"Evaluation complete in {state['eval_seconds']:.1f}s",
+            sub=f"{len(result.scores or {})} benchmarks scored",
+            generation=state.get("generation"),
+        )
         await _emit(state, "evaluate")
         return state
 
     async def compare_to_champion(state: EvolutionState) -> EvolutionState:
+        _phase_start(
+            state,
+            phase="decide",
+            label="Comparing to champion",
+        )
         child_avg = _avg(state.get("child_scores", {}))
         champion_avg = state.get("champion_avg", 0.0)
         # The first generation has no champion to beat — promote any
@@ -236,6 +337,13 @@ def build_graph(
         return state
 
     async def promote_or_discard(state: EvolutionState) -> EvolutionState:
+        decision = state.get("decision") or "?"
+        _phase_start(
+            state,
+            phase="decide",
+            label=("Promoting new champion" if decision == "promote" else "Discarding generation"),
+            sub=str(state.get("decision_reason") or ""),
+        )
         if state["decision"] == "promote":
             state["champion_avg"] = _avg(state.get("child_scores", {}))
             state["champion_path"] = state.get("adapter_path")

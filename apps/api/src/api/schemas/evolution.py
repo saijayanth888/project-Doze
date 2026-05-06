@@ -67,3 +67,28 @@ class EvolutionStopResponse(BaseModel):
     run_id: str
     stopped: bool
     message: str
+
+
+class PhaseEvent(BaseModel):
+    """One curated event from the in-process run_events ring buffer.
+
+    Distinct from EvolutionEvent (which describes durable lineage milestones
+    persisted to Postgres / forwarded to n8n). PhaseEvent is for the live
+    "what is the orchestrator doing right now" feed in the UI.
+    """
+
+    id: int
+    ts: float = Field(description="Unix timestamp (seconds since epoch)")
+    run_id: str
+    phase: str = Field(description="init|curate|train|eval|decide|error")
+    level: str = Field(default="info", description="info|warn|error")
+    label: str
+    sub: str | None = None
+    metric: dict[str, Any] | None = None
+    generation: int | None = None
+
+
+class PhaseEventList(BaseModel):
+    run_id: str
+    events: list[PhaseEvent]
+    next_since: int = Field(description="Pass back as ?since=<n> on the next poll to get only new events")

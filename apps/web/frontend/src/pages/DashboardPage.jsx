@@ -3,6 +3,7 @@ import ChampionCard from '../components/dashboard/ChampionCard';
 import LatestGeneration from '../components/dashboard/LatestGeneration';
 import ScoreTrends from '../components/dashboard/ScoreTrends';
 import ActivityFeed from '../components/dashboard/ActivityFeed';
+import EventsFeed from '../components/dashboard/EventsFeed';
 import GPUMonitor from '../components/dashboard/GPUMonitor';
 
 const s = (i) => ({ animation: `slide-up-fade 0.4s cubic-bezier(0.16,1,0.3,1) ${i * 60}ms both` });
@@ -17,14 +18,20 @@ export default function DashboardPage() {
         <LatestGeneration />
       </div>
 
-      {/* Row 2: Trends (8) + Feed (4) */}
-      <div style={{ display: 'grid', gridTemplateColumns: '8fr 4fr', gap: 16, minHeight: 280, ...s(1) }}>
+      {/* Row 2: Live phase events (full width) — sits high so the user sees
+           "what's happening now" without scrolling. */}
+      <div style={{ ...s(1) }}>
+        <EventsFeed />
+      </div>
+
+      {/* Row 3: Trends (8) + Activity history (4) */}
+      <div style={{ display: 'grid', gridTemplateColumns: '8fr 4fr', gap: 16, minHeight: 280, ...s(2) }}>
         <ScoreTrends />
         <ActivityFeed />
       </div>
 
-      {/* Row 3: GPU */}
-      <div style={{ ...s(2) }}>
+      {/* Row 4: GPU */}
+      <div style={{ ...s(3) }}>
         <GPUMonitor />
       </div>
     </div>

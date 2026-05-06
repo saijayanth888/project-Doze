@@ -172,6 +172,14 @@ class HuggingFaceDataCurator:
             weakness_report[:200],
         )
 
+        # Lazy import — keeps the curator usable in environments without the
+        # api package on the path (e.g. one-off scripts).
+        try:
+            from services import run_events as _run_events
+        except Exception:
+            _run_events = None
+        run_id = str((config or {}).get("run_id") or "") if isinstance(config, dict) else ""
+
         per_cat_budget = max(1, int(max_samples / max(1, len(categories))))
         for category in categories:
             for ds_name, ds_config, split_name, suggested_n in WEAKNESS_DATASETS.get(category, []):
@@ -184,8 +192,15 @@ class HuggingFaceDataCurator:
                         "[curator] failed to load %s/%s split=%s: %s",
                         ds_name, ds_config, split_spec, exc,
                     )
+                    if _run_events and run_id:
+                        _run_events.publish(
+                            run_id, phase="curate", level="warn",
+                            label=f"failed to load {ds_name} ({split_spec})",
+                            sub=str(exc)[:200], generation=generation,
+                        )
                     continue
 
+                added_for_source = 0
                 for ex in ds:
                     norm = self._normalize_sample(category, ex)
                     if norm is None:
@@ -199,9 +214,18 @@ class HuggingFaceDataCurator:
                             "response": norm["response"],
                         }
                     )
+                    added_for_source += 1
                     if len(samples) >= max_samples:
                         break
                 sources.append(ds_name)
+                if _run_events and run_id:
+                    _run_events.publish(
+                        run_id, phase="curate",
+                        label=f"+{added_for_source} from {ds_name}",
+                        sub=f"{category} · split {split_name} · total now {len(samples)}/{max_samples}",
+                        metric={"category": category, "added": added_for_source, "total": len(samples)},
+                        generation=generation,
+                    )
                 if len(samples) >= max_samples:
                     break
             if len(samples) >= max_samples:

@@ -16,7 +16,10 @@ from api.schemas.evolution import (
     EvolutionRequest,
     EvolutionStatus,
     EvolutionStopResponse,
+    PhaseEvent,
+    PhaseEventList,
 )
+from services import run_events
 from services.lineage_db import LineageDB
 
 logger = logging.getLogger("modelforge.routes.evolution")
@@ -166,4 +169,23 @@ async def stop_evolution(
         run_id=run_id,
         stopped=True,
         message=f"Run {run_id} stopped",
+    )
+
+
+@router.get("/{run_id}/events", response_model=PhaseEventList)
+async def get_run_events(run_id: str, since: int = -1, limit: int = 200) -> PhaseEventList:
+    """Live phase-event stream for one run.
+
+    Pull from the in-process ring buffer (services.run_events). Returns events
+    with id > `since` so the frontend can poll incrementally without re-pulling
+    the whole buffer each tick. The buffer is in-memory only — surviving an
+    API restart is intentionally not a goal because the orchestrator task dies
+    on restart anyway.
+    """
+    items = run_events.list_events(run_id, since=since, limit=limit)
+    next_since = items[-1]["id"] if items else since
+    return PhaseEventList(
+        run_id=run_id,
+        events=[PhaseEvent(**e) for e in items],
+        next_since=next_since,
     )
