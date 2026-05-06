@@ -5,6 +5,7 @@ from api.routes import (
     automation,
     configs,
     datasets,
+    ept,
     evaluation,
     evolution,
     experiments,
@@ -29,4 +30,5 @@ api_router.include_router(system.router, prefix="/system", tags=["System"])
 api_router.include_router(automation.router, prefix="/automation", tags=["Automation"])
 api_router.include_router(experiments.router, prefix="/experiments", tags=["Experiments"])
 api_router.include_router(exports.router, prefix="/export", tags=["Exports"])
+api_router.include_router(ept.router, prefix="/ept", tags=["EPT"])
 api_router.include_router(websocket.router, tags=["WebSocket"])
