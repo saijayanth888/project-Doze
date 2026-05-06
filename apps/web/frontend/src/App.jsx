@@ -9,6 +9,7 @@ const LineagePage = lazy(() => import('./pages/LineagePage'));
 const DatasetsPage = lazy(() => import('./pages/DatasetsPage'));
 const BenchmarksPage = lazy(() => import('./pages/BenchmarksPage'));
 const PlaygroundPage = lazy(() => import('./pages/PlaygroundPage'));
+const AutomationPage = lazy(() => import('./pages/AutomationPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 
 function PageFallback() {
@@ -42,6 +43,7 @@ export default function App() {
             <Route path="/datasets" element={<DatasetsPage />} />
             <Route path="/benchmarks" element={<BenchmarksPage />} />
             <Route path="/playground" element={<PlaygroundPage />} />
+            <Route path="/automation" element={<AutomationPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
         </Routes>

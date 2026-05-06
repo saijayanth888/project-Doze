@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from api.routes import (
     adapters,
+    automation,
     configs,
     datasets,
     evaluation,
@@ -23,4 +24,5 @@ api_router.include_router(adapters.router, prefix="/adapters", tags=["Adapters"]
 api_router.include_router(datasets.router, prefix="/datasets", tags=["Datasets"])
 api_router.include_router(configs.router, prefix="/configs", tags=["Configs"])
 api_router.include_router(system.router, prefix="/system", tags=["System"])
+api_router.include_router(automation.router, prefix="/automation", tags=["Automation"])
 api_router.include_router(websocket.router, tags=["WebSocket"])

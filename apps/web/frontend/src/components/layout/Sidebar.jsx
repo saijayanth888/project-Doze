@@ -7,6 +7,7 @@ import {
   MessageSquare,
   Settings2,
   Play,
+  Bot,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
@@ -21,6 +22,7 @@ const NAV = [
   { id: 'datasets', path: '/datasets', label: 'Datasets', icon: Database },
   { id: 'benchmarks', path: '/benchmarks', label: 'Benchmarks', icon: BarChart2 },
   { id: 'playground', path: '/playground', label: 'Playground', icon: MessageSquare },
+  { id: 'automation', path: '/automation', label: 'Automation', icon: Bot },
   { id: 'settings', path: '/settings', label: 'Settings', icon: Settings2 },
 ];
 

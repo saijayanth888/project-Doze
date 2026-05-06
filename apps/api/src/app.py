@@ -60,7 +60,25 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning("phase3/4 migration/seed skipped: %s", exc)
 
+    # Built-in automation engine — replaces n8n. Best-effort; if APScheduler
+    # isn't installed yet (older image) the engine silently no-ops.
+    automation_engine = None
+    try:
+        from services.automation import AutomationEngine, attach_engine
+        automation_engine = AutomationEngine(app)
+        attach_engine(automation_engine)
+        await automation_engine.start()
+    except Exception as exc:
+        logger.warning("automation engine start skipped: %s", exc)
+    app.state.automation = automation_engine
+
     yield
+
+    if automation_engine is not None:
+        try:
+            await automation_engine.stop()
+        except Exception as exc:
+            logger.debug("automation stop: %s", exc)
 
     await close_redis()
     await close_db()

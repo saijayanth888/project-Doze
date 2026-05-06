@@ -51,56 +51,58 @@ services:
       retries: 5
     restart: unless-stopped
 
-  n8n:
-    # Default: latest n8n. Set N8N_IMAGE in `.env` to pin (e.g. n8nio/n8n:1.120.0 or a digest).
-    image: ${N8N_IMAGE:-n8nio/n8n:latest}
-    container_name: mf-n8n
-    ports:
-      # Single host binding (Compose merges `ports` across override files — do not add another n8n `ports` entry there).
-      # n8n listens on 5678 *inside* the container; default **host** port is 5679 so local :5678 stays free for other stacks.
-      # Override with N8N_HOST_PORT in `.env` and match N8N_WEBHOOK_URL / VITE_N8N_HOST / MCP URL.
-      - "${N8N_HOST_PORT:-5679}:5678"
-    environment:
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=n8n
-      - DB_POSTGRESDB_USER=${POSTGRES_USER:-modelforge}
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
-      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY must be set (min 32 chars recommended)}
-      - N8N_HOST=0.0.0.0
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=http
-      # Required for HTTP via LAN IP / Tailscale (not localhost). Use true behind HTTPS in production.
-      - N8N_SECURE_COOKIE=${N8N_SECURE_COOKIE:-false}
-      # Must match the host port you publish (see ports:). Override via N8N_WEBHOOK_URL when remapping.
-      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5679/}
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:?N8N_BASIC_AUTH_PASSWORD must be set}
-      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
-      # Exposed to workflow expressions as $env.MODELFORGE_API_KEY
-      - MODELFORGE_API_KEY=${MODELFORGE_API_KEY:-}
-      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
-      - N8N_WEBHOOK_SECRET=${N8N_WEBHOOK_SECRET:-}
-      - EVOLUTION_BASE_MODEL=${EVOLUTION_BASE_MODEL:-llama3.2:3b}
-      - EVOLUTION_MAX_GENS=${EVOLUTION_MAX_GENS:-10}
-      - N8N_RESTRICT_ENVIRONMENT_VARIABLES=false
-    volumes:
-      - n8n_data:/home/node/.n8n
-      # Bundled JSON for `n8n import:workflow` (see scripts/n8n-import-workflows-compose.sh).
-      - ./integrations/n8n/workflows:/import/modelforge-workflows:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-    # n8n image ships wget, not curl — curl here keeps the container "unhealthy" forever.
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5678/healthz || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 40s
-    restart: unless-stopped
+  # n8n is no longer required — all automation is built into the ModelForge API.
+  # The in-process AutomationEngine (services/automation.py) handles scheduling,
+  # drift detection, health monitoring, Slack notifications, daily/weekly
+  # reports, and auto-cleanup natively. Manage everything from /automation
+  # in the dashboard.
+  #
+  # The previous n8n service block + workflow JSON files are kept in
+  # `integrations/n8n/workflows/` for reference. To re-enable n8n for custom
+  # workflows alongside the built-in engine, uncomment the block below and put
+  # the n8n container back into the api service's `depends_on`.
+  #
+  # n8n:
+  #   image: ${N8N_IMAGE:-n8nio/n8n:latest}
+  #   container_name: mf-n8n
+  #   ports:
+  #     - "${N8N_HOST_PORT:-5679}:5678"
+  #   environment:
+  #     - DB_TYPE=postgresdb
+  #     - DB_POSTGRESDB_HOST=postgres
+  #     - DB_POSTGRESDB_PORT=5432
+  #     - DB_POSTGRESDB_DATABASE=n8n
+  #     - DB_POSTGRESDB_USER=${POSTGRES_USER:-modelforge}
+  #     - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+  #     - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+  #     - N8N_HOST=0.0.0.0
+  #     - N8N_PORT=5678
+  #     - N8N_PROTOCOL=http
+  #     - N8N_SECURE_COOKIE=${N8N_SECURE_COOKIE:-false}
+  #     - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5679/}
+  #     - N8N_BASIC_AUTH_ACTIVE=true
+  #     - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
+  #     - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+  #     - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+  #     - MODELFORGE_API_KEY=${MODELFORGE_API_KEY:-}
+  #     - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+  #     - N8N_WEBHOOK_SECRET=${N8N_WEBHOOK_SECRET:-}
+  #     - EVOLUTION_BASE_MODEL=${EVOLUTION_BASE_MODEL:-llama3.2:3b}
+  #     - EVOLUTION_MAX_GENS=${EVOLUTION_MAX_GENS:-10}
+  #     - N8N_RESTRICT_ENVIRONMENT_VARIABLES=false
+  #   volumes:
+  #     - n8n_data:/home/node/.n8n
+  #     - ./integrations/n8n/workflows:/import/modelforge-workflows:ro
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5678/healthz || exit 1"]
+  #     interval: 30s
+  #     timeout: 5s
+  #     retries: 5
+  #     start_period: 40s
+  #   restart: unless-stopped
 
   api:
     build:
@@ -134,8 +136,14 @@ services:
       # Compose Ollama service: set OLLAMA_HOST=http://ollama:11434 in `.env` and `docker compose --profile gpu up`.
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
       VLLM_HOST: http://vllm:8000
-      N8N_WEBHOOK_EVOLUTION_URL: "${N8N_WEBHOOK_EVOLUTION_URL:-http://n8n:5678/webhook/evolution-events}"
-      N8N_WEBHOOK_SECRET: "${N8N_WEBHOOK_SECRET:-}"
+      # Slack webhook used by the in-process AutomationEngine (no n8n needed).
+      # Override per-instance from the dashboard at /automation, which writes
+      # to the automation_settings table and takes precedence over this env.
+      SLACK_WEBHOOK_URL: "${SLACK_WEBHOOK_URL:-}"
+      # n8n is no longer required — the API has its own scheduler. These two
+      # env vars are kept (commented out) so re-enabling n8n is one uncomment.
+      # N8N_WEBHOOK_EVOLUTION_URL: "${N8N_WEBHOOK_EVOLUTION_URL:-http://n8n:5678/webhook/evolution-events}"
+      # N8N_WEBHOOK_SECRET: "${N8N_WEBHOOK_SECRET:-}"
       NVIDIA_VISIBLE_DEVICES: all
       # The image's `app` user has no writable HOME (`/home/app` is not created).
       # Point all HF caches at the persistent data volume so model downloads don't

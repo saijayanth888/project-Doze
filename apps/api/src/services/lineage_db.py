@@ -567,6 +567,50 @@ class LineageDB:
             )
             """,
             "INSERT INTO evolution_schedule (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
+            # Automation jobs (in-process scheduler that replaced n8n).
+            """
+            CREATE TABLE IF NOT EXISTS automation_jobs (
+                job_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                cron TEXT NOT NULL,
+                enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                config JSONB NOT NULL DEFAULT '{}'::jsonb,
+                last_run_at TIMESTAMPTZ,
+                last_run_status TEXT,
+                last_run_message TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS automation_log (
+                id BIGSERIAL PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                level TEXT NOT NULL DEFAULT 'info',
+                message TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_automation_log_recent ON automation_log (created_at DESC)",
+            # Per-event-type Slack notification allow-list, plus the slack URL
+            # override (so the UI can manage it without touching .env).
+            """
+            CREATE TABLE IF NOT EXISTS automation_settings (
+                id INT PRIMARY KEY DEFAULT 1,
+                slack_webhook_url TEXT,
+                notify_event_types JSONB NOT NULL DEFAULT '[
+                    "evolution_started","champion_promoted","evolution_failed",
+                    "drift_detected","daily_report"
+                ]'::jsonb,
+                regression_threshold_pct DOUBLE PRECISION NOT NULL DEFAULT 3.0,
+                cleanup_keep_days INT NOT NULL DEFAULT 7,
+                memory_guard_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                memory_guard_max_gb DOUBLE PRECISION,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CHECK (id = 1)
+            )
+            """,
+            "INSERT INTO automation_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
         ]
         async with self._pool.acquire() as conn:
             for stmt in ddl:
@@ -835,3 +879,154 @@ def _normalize_track_gen_row(row: dict) -> dict:
     out = dict(row)
     out["scores"] = _coerce_jsonb(out.get("scores")) or {}
     return out
+
+
+# ── Phase-3 / Automation DAO methods (attached to LineageDB by name) ──────
+async def _list_automation_jobs(self) -> list[dict]:
+    if self._pool is None:
+        return []
+    async with self._pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM automation_jobs ORDER BY job_id ASC")
+    return [_normalize_job_row(dict(r)) for r in rows]
+
+
+async def _get_automation_job(self, job_id: str) -> dict | None:
+    if self._pool is None:
+        return None
+    async with self._pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM automation_jobs WHERE job_id = $1", job_id)
+    return _normalize_job_row(dict(row)) if row else None
+
+
+async def _upsert_automation_job(
+    self,
+    *,
+    job_id: str,
+    name: str,
+    cron: str,
+    enabled: bool,
+    config: dict | None,
+) -> dict | None:
+    if self._pool is None:
+        return None
+    async with self._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO automation_jobs (job_id, name, cron, enabled, config)
+            VALUES ($1, $2, $3, $4, $5::jsonb)
+            ON CONFLICT (job_id) DO UPDATE SET
+                name       = EXCLUDED.name,
+                cron       = EXCLUDED.cron,
+                enabled    = EXCLUDED.enabled,
+                config     = EXCLUDED.config,
+                updated_at = NOW()
+            RETURNING *
+            """,
+            job_id, name, cron, bool(enabled), json.dumps(config or {}),
+        )
+    return _normalize_job_row(dict(row)) if row else None
+
+
+async def _record_automation_run(
+    self,
+    *,
+    job_id: str,
+    status: str,
+    message: str,
+) -> None:
+    if self._pool is None:
+        return
+    async with self._pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE automation_jobs
+               SET last_run_at = NOW(),
+                   last_run_status = $2,
+                   last_run_message = $3,
+                   updated_at = NOW()
+             WHERE job_id = $1
+            """,
+            job_id, status, message,
+        )
+        await conn.execute(
+            "INSERT INTO automation_log (job_id, level, message) VALUES ($1,$2,$3)",
+            job_id, status, message,
+        )
+
+
+async def _list_automation_log(self, *, limit: int = 50) -> list[dict]:
+    if self._pool is None:
+        return []
+    async with self._pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM automation_log ORDER BY created_at DESC LIMIT $1",
+            int(limit),
+        )
+    return [dict(r) for r in rows]
+
+
+async def _clear_automation_log(self) -> int:
+    if self._pool is None:
+        return 0
+    async with self._pool.acquire() as conn:
+        n = await conn.fetchval("WITH d AS (DELETE FROM automation_log RETURNING 1) SELECT count(*) FROM d")
+    return int(n or 0)
+
+
+async def _get_automation_settings(self) -> dict | None:
+    if self._pool is None:
+        return None
+    async with self._pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM automation_settings WHERE id = 1")
+    if not row:
+        return None
+    out = dict(row)
+    out["notify_event_types"] = _coerce_jsonb(out.get("notify_event_types")) or []
+    return out
+
+
+async def _update_automation_settings(self, payload: dict) -> dict | None:
+    if self._pool is None:
+        return None
+    sets, vals = [], []
+    for key in (
+        "slack_webhook_url",
+        "regression_threshold_pct",
+        "cleanup_keep_days",
+        "memory_guard_enabled",
+        "memory_guard_max_gb",
+    ):
+        if key in payload:
+            sets.append(f"{key} = ${len(vals) + 1}")
+            vals.append(payload[key])
+    if "notify_event_types" in payload:
+        sets.append(f"notify_event_types = ${len(vals) + 1}::jsonb")
+        vals.append(json.dumps(payload["notify_event_types"]))
+    if not sets:
+        return await self._get_automation_settings()
+    sets.append("updated_at = NOW()")
+    sql = f"UPDATE automation_settings SET {', '.join(sets)} WHERE id = 1 RETURNING *"
+    async with self._pool.acquire() as conn:
+        row = await conn.fetchrow(sql, *vals)
+    if not row:
+        return None
+    out = dict(row)
+    out["notify_event_types"] = _coerce_jsonb(out.get("notify_event_types")) or []
+    return out
+
+
+def _normalize_job_row(row: dict) -> dict:
+    out = dict(row)
+    out["config"] = _coerce_jsonb(out.get("config")) or {}
+    return out
+
+
+# Bind the helpers as LineageDB methods so call sites read naturally.
+LineageDB.list_automation_jobs    = _list_automation_jobs
+LineageDB.get_automation_job      = _get_automation_job
+LineageDB.upsert_automation_job   = _upsert_automation_job
+LineageDB.record_automation_run   = _record_automation_run
+LineageDB.list_automation_log     = _list_automation_log
+LineageDB.clear_automation_log    = _clear_automation_log
+LineageDB.get_automation_settings = _get_automation_settings
+LineageDB.update_automation_settings = _update_automation_settings

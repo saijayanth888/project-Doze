@@ -35,6 +35,22 @@ from services.data_curator import (
 from services import run_events
 from services.lineage_db import LineageDB
 from services.model_registry import ModelRegistry
+
+
+async def _notify_automation(message: str, emoji: str, *, event_type: str | None = None) -> None:
+    """Best-effort fan-out to the in-process automation engine (Slack + log).
+
+    Wrapped in try/except so a notify failure can never abort an evolution
+    run. The engine is a no-op when not yet attached (e.g. during tests or
+    before APScheduler ships in the image).
+    """
+    try:
+        from services.automation import get_engine
+        eng = get_engine()
+        if eng:
+            await eng.notify(message, emoji, event_type=event_type)
+    except Exception:
+        pass
 from services.n8n_webhook import (
     build_evolution_payload,
     emit_evolution_complete,
@@ -94,6 +110,11 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
         phase="init",
         label=f"Run {run_id} started",
         sub=f"training={training.name} · eval={eval_backend.name} · curator={getattr(curator, 'name', '?')} · gpu={prefer_real}",
+    )
+    await _notify_automation(
+        f"Evolution started: {config.get('base_model','?')} × {config.get('max_generations','?')} gen — run {run_id}",
+        "🚀",
+        event_type="evolution_started",
     )
 
     state: EvolutionState = {
@@ -230,6 +251,16 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     weak_categories=s.get("weak_categories", []),
                 )
             )
+            # In-process Slack/log fan-out (replaces n8n).
+            scs = s.get("child_scores") or {}
+            avg = sum(float(v) for v in scs.values()) / max(1, len(scs))
+            promoted = s.get("decision") == "promote"
+            await _notify_automation(
+                f"Gen {s['generation']} {'promoted' if promoted else 'discarded'} — avg {avg:.3f}"
+                + (f" ({s.get('decision_reason')})" if not promoted and s.get('decision_reason') else ""),
+                "🏆" if promoted else "❌",
+                event_type="champion_promoted" if promoted else "generation_complete",
+            )
 
     graph = build_graph(
         training=training,
@@ -278,6 +309,12 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     "base_model": base_model,
                 },
             )
+            await _notify_automation(
+                f"Run complete — champion avg {float(final.get('champion_avg', 0.0)):.3f} "
+                f"after {int(final.get('generation', 0) or 0)} generation(s)",
+                "✅",
+                event_type="evolution_complete",
+            )
         logger.info(
             "[evolution %s] finished — last gen %s, champion avg %.4f",
             run_id,
@@ -299,6 +336,11 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
             sub=str(exc)[:300],
         )
         logger.exception("[evolution %s] failed", run_id)
+        await _notify_automation(
+            f"Run {run_id} failed: {type(exc).__name__}: {str(exc)[:200]}",
+            "🔴",
+            event_type="evolution_failed",
+        )
         await db.update_run_status(
             run_id,
             status="failed",
