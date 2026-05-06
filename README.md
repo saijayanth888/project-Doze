@@ -20,8 +20,17 @@ and a real-time dashboard.
 
 ---
 
+> **📍 Live status — 2026-05-06 22:07 UTC**
+> Phase-3 evidence run **`run-9d5f1b58`** (Llama 3.2 3B-Instruct × 3 gens) is in flight. ETA ~06:00 UTC tomorrow.
+> First run with the per-task metric extraction fix (GSM8K + HumanEval will record real scores) and track auto-promotion live.
+> **Do not rebuild api/frontend until the run completes** — it kills the in-process LangGraph task. Slack will ping `✅ Evolution Complete` when it finishes.
+> See [Tomorrow's pickup playbook](#tomorrows-pickup-playbook) for the morning validation steps.
+
+---
+
 ## Table of contents
 
+- [Tomorrow's pickup playbook](#tomorrows-pickup-playbook)
 - [What it is](#what-it-is)
 - [Why it exists](#why-it-exists)
 - [Capabilities at a glance](#capabilities-at-a-glance)
@@ -85,6 +94,150 @@ methodology metadata persisted for paper-grade reproducibility.
 
 ---
 
+## Tomorrow's pickup playbook
+
+Use this as a single-page checklist when you sit down at the workstation
+the morning after Phase-3.
+
+### Step 1 — Is Phase-3 done?
+
+Open **`http://localhost:3001/dashboard`**. Look at the **Evolution
+Status** card at the top:
+
+| What you see | What it means | Action |
+|---|---|---|
+| `idle` / `completed` pill, champion card updated | Run finished. | Move to Step 2. |
+| `running` pill, step indicator on `evaluate` (gen 2 or 3) | Still going. | Wait. ETA from the elapsed counter. Don't rebuild. |
+| `failed` pill, error in the card | Something broke. | `docker compose logs --tail 80 api` for the trace; copy `run_id` to `/history` for full record. |
+
+Slack will also have pinged with `✅ Evolution Complete` (rich Block Kit
+message lands on next rebuild — current run is the older plain text).
+
+### Step 2 — Verify the fixes landed
+
+Phase-3 is the first run with the GSM8K/HumanEval extraction fix
+(`f6f2713`) and track auto-promotion (`a3b1ab1`). Three quick
+verifications:
+
+1. **Generative benchmarks score non-zero.** On `/lineage`, click any
+   promoted generation row. The score panel must show non-zero values for
+   `gsm8k` and `humaneval`. Phase-2 saw `0.000` for both because the
+   extractor only knew `acc,none` keys; Phase-3 should record real
+   numbers (~0.6 for GSM8K, ~0.2 for HumanEval on Llama 3.2 3B).
+2. **Tracks auto-populated.** Open `/forge`. The 4 track cards should
+   each show a champion adapter (✓ adapter pill) — not just `reasoning`
+   and `general` from yesterday's manual sync. `math` and `code` will
+   light up from this run.
+3. **Live `current_step` worked during eval.** On `/dashboard` you should
+   have seen the step indicator show `evaluate` for ~2.5h, not stuck on
+   `train_adapter`. (This is observable retroactively only via the live
+   events panel of an in-flight run, but the fix is verified by code
+   review of `evolution_graph.evaluate`.)
+
+### Step 3 — Smoke-test the new surfaces
+
+| Page | Quick check |
+|---|---|
+| **`/forge`** | Type `Calculate 17 × 23` → should route to `math` (keyword 33%), backend `peft`, real adapter loaded, correct answer. |
+| **`/forge`** | Type `Why is the sky blue?` → should route to `general` via LLM tiebreak, backend `peft`. |
+| **`/automation`** | "Drift Detection" workflow card → click **Run now**. Should execute `drift.check` step, then either notify Slack or skip via per-action condition depending on whether scores actually drifted. |
+| **`/history`** | Run-9d5f1b58 should appear with `completed` status, 3 generations persisted, final champion avg shown. Click row to expand for per-bench score breakdown. |
+
+### Step 4 — Run a fresh evolution from the UI (preset path)
+
+1. **`/dashboard`** → Evolution Status card → green **`Start Evolution`** button.
+2. Modal opens on the **`Preset`** tab (the default — leave it).
+3. Pick a preset:
+
+   | Preset | Gens | Samples | LoRA r | Wall time on GB10 | Best for |
+   |---|---|---|---|---|---|
+   | **`quick-test`** | 2 | 500 | 8 | ~30 min | smoke test, dev iteration |
+   | **`standard`** | 10 | 3000 | 16 | ~28 hr | normal training arc |
+   | **`deep-evolution`** | 25 | 5000 | 32 | several days | big push |
+   | **`code-specialist`** | 15 | 3000 | 16 | ~40 hr | targets HumanEval |
+   | **`reasoning-specialist`** | 15 | 3000 | 16 | ~40 hr | targets ARC + HellaSwag |
+
+4. *(Optional)* Override the base model in the **Ollama tag** field — leave
+   blank to use `llama3.2:3b`.
+5. **`Start Evolution`** → card flips to `starting` → `init` → `curate` →
+   `train` → `evaluate` over the next few minutes. Score trends + activity
+   feed update live.
+
+**Recommended morning sequence:** `quick-test` first (~30 min) to confirm
+the new pipeline works end-to-end with real data; if scores look right,
+kick off `standard` and let it run for the day.
+
+### Step 5 — Set up scheduled evolutions (optional)
+
+If you want the system to fire on cron rather than clicking a button:
+
+1. **`/automation`** → find the **`Nightly Evolution`** workflow card on
+   the left rail (currently disabled).
+2. Toggle **enabled = on**.
+3. Default cron is `0 2 * * *` (daily 02:00 UTC). Edit the trigger card if
+   you want a different cadence — the cron builder shows next 5 fires
+   live.
+4. The workflow's `evolution.start` action carries the same config knobs
+   as the dashboard preset. Edit the action's config form to tune.
+
+### Step 6 — Fresh Slack messages
+
+The new rich Block Kit messages activate **on next rebuild**:
+
+```bash
+docker compose build api && docker compose up -d api
+```
+
+Run only after Phase-3 is fully complete. The next evolution will then
+trigger:
+
+- 🚀 Evolution Started — header + run/base/gens fields + config context + Dashboard button
+- 🏆 Champion Promoted — header + Run/Gen/Avg/Duration + score table with Δ vs prev + Lineage/Adapters buttons
+- ❌ Generation Discarded — same shape with discard reason
+- ✅ Evolution Complete — final scores table + Dashboard/History/Lineage buttons
+- 🚨 Evolution Failed — error type + traceback in code block
+- 🎯 Track Promoted (new — was silent) — track + new owner + ForgeAgent button
+
+Set `MODELFORGE_DASHBOARD_URL=https://forge.example.com` in `.env` to get
+the action-button deep-links.
+
+### Helpful commands
+
+```bash
+# How's the run doing?
+K=$(grep '^MODELFORGE_API_KEY=' .env | cut -d= -f2)
+curl -s -H "X-API-Key: $K" http://localhost:8000/api/evolve/status | jq
+
+# Per-generation breakdown (last 5)
+curl -s -H "X-API-Key: $K" http://localhost:8000/api/lineage/generations | jq '.[:5]'
+
+# Last 25 events for a specific run (use start_time as 'since' cursor)
+curl -s -H "X-API-Key: $K" "http://localhost:8000/api/evolve/run-XXXXXXXX/events?limit=25" | jq
+
+# Track state (which adapters own which specialist)
+curl -s -H "X-API-Key: $K" http://localhost:8000/api/forge/tracks | jq
+
+# Storage usage
+curl -s -H "X-API-Key: $K" http://localhost:8000/api/system/storage | jq
+
+# Stop a run cleanly
+curl -X POST -H "X-API-Key: $K" http://localhost:8000/api/evolve/<run_id>/stop
+```
+
+### Today's commit log (everything that landed)
+
+| Commit | What |
+|---|---|
+| `2588cf3` | Enterprise README rewrite with mermaid diagrams |
+| `f6f2713` | GSM8K/HumanEval per-task metric extraction + early `_emit` for live `current_step` |
+| `902deb8` | Workflow engine — triggers (cron/event/webhook/manual), conditions, 9 actions, 3-column UI |
+| `ceb0802` | ForgeAgent — keyword + LLM classifier, router, conversation page |
+| `a3b1ab1` | Track auto-promotion on champion + retroactive sync endpoint |
+| `3338828` | Backlog cleanup — `/history`, `/schedule`, `/system/storage`, manual track promote |
+| `827c3b9` | Rich Slack Block Kit messages for all evolution lifecycle events |
+
+---
+
 ## Capabilities at a glance
 
 | Capability | Where it lives | Notes |
@@ -96,8 +249,13 @@ methodology metadata persisted for paper-grade reproducibility.
 | Population evolution (EPT) | `apps/api/src/agents/ept/` | Crossover + mutation + tournament + lineage; 3 strategies (uniform, layer-wise, random-swap) |
 | Honest base-vs-champion inference | `services/peft_inference.py` | LRU-cached base, attaches PEFT for the champion side; replaces the deceptive Ollama-tag fallback |
 | Live phase event feed | `services/run_events.py` + `EventsFeed.jsx` | In-process ring buffer; `since=` cursor; UI polls every 2s |
-| Built-in automation engine | `services/automation.py` | APScheduler in-process; replaces n8n; six default jobs (evolution, drift, health, daily, weekly, cleanup) |
-| Slack notifications | `services/automation.AutomationEngine` | Per-event-type allow-list; URL stored in DB, masked in API responses |
+| Workflow engine (trigger → condition → actions) | `services/automation_engine/` | Cron / event / webhook / manual triggers; tiny JSON-expression evaluator; 9 typed actions; per-action conditions; 7 seeded system workflows + user-defined |
+| Domain event bus | `services/event_bus.py` | In-process pub/sub; runner publishes `evolution.started`, `champion.promoted`, `generation.discarded`, etc. — workflows subscribe via fnmatch patterns |
+| Rich Slack notifications | `services/slack_blocks.py` | Block Kit headers + score tables with Δ vs prev + action buttons (Dashboard/Lineage/Adapters/ForgeAgent); per-event-type allow-list; webhook URL masked in API responses |
+| ForgeAgent (classifier-routed inference) | `agents/forge_agent.py` + `services/track_seed.py` | Keyword scorer → LLM tiebreak → routes to specialist track adapter (PEFT) with Ollama-base fallback; 4 default tracks: reasoning, code, math, general |
+| Auto-promote champions to matching tracks | `agents/runner._maybe_promote_to_tracks` | After global-champion promotion, walks all tracks and updates each whose target benchmarks the new champion is best on; emits `track.promoted` event |
+| Run history (full record + archive) | `routes/history.py` + `pages/HistoryPage.jsx` | Joined view of every run with stats / filter / search / per-row expand for full config + score breakdown |
+| Storage diagnostics | `routes/system.py:storage_usage` | Per-bucket scan (adapters / curated / ept / hf_cache / registry) + free-disk numbers via `shutil.disk_usage` |
 | Paper-ready exports | `api/routes/exports.py` | Score curves (PNG/SVG), lineage tree (PNG/SVG), LaTeX ablation table, full JSON dump |
 | Ablation studies | `services/ablation_presets.py` + `routes/experiments.py` | 4 hardcoded ablations (lr, rank, data-source, specialist-vs-generalist), sequential queue |
 | Dashboard | `apps/web/frontend/` | 9 pages: Dashboard, Adapters, Lineage, Datasets, Benchmarks, Playground, Population (EPT), Automation, Settings |
@@ -624,6 +782,7 @@ The full surface is in `http://localhost:8000/docs`. Highlights by tag:
 | `GET /api/adapters/` | All adapters with scores, training config, weights flag |
 | `POST /api/adapters/{id}/serve` | Make this the served champion (refuses empty stubs) |
 | `POST /api/adapters/{id}/rollback` | Promote any adapter to champion |
+| `POST /api/adapters/{id}/promote_to_track` | Manual override — assign adapter as champion of a specific track |
 | `GET /api/adapters/compare/{a}/{b}` | Same-prompt inference on both |
 | `POST /api/adapters/cleanup` | Delete archived adapters older than N days |
 
@@ -647,6 +806,25 @@ The full surface is in `http://localhost:8000/docs`. Highlights by tag:
 | `GET /api/ept/events` | In-memory event log |
 | `POST /api/ept/stop` | Cooperative cancel |
 
+### ForgeAgent
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/forge/tracks` | List specialist tracks with champion adapter status |
+| `POST /api/forge/classify` | Dry-run the classifier (no inference) |
+| `POST /api/forge/query` | Full pipeline — classify → execute. Optional `track_id` pin + `force_base` |
+| `POST /api/forge/compare` | Same prompt across all enabled tracks (parallel A/B grid) |
+| `POST /api/forge/sync_tracks` | Retroactive — walk all promoted generations, update each track to its best adapter |
+
+### History + Schedule
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/history/runs` | All evolution runs with promoted-champion summary; supports `include_archived` + `limit` |
+| `POST /api/history/runs/{id}/archive` | Soft-delete via `archived_at` |
+| `GET /api/schedule` | Legacy single-row schedule (workflows are the recommended path) |
+| `PUT /api/schedule` | Update legacy schedule row |
+
 ### Experiments + paper exports
 
 | Endpoint | Purpose |
@@ -660,15 +838,27 @@ The full surface is in `http://localhost:8000/docs`. Highlights by tag:
 | `GET /api/export/ablation-table` | LaTeX (booktabs) table |
 | `GET /api/export/experiment-data` | Complete JSON dump |
 
-### Automation
+### Automation — workflows
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/automation/jobs` | All scheduled jobs with last-run state |
-| `PUT /api/automation/jobs/{id}` | Enable/disable, retime, reconfigure |
-| `POST /api/automation/jobs/{id}/trigger` | Run now |
+| `GET /api/automation/workflows` | List workflows (filter by `kind=system\|user`) |
+| `POST /api/automation/workflows` | Create a user workflow |
+| `GET /api/automation/workflows/{id}` | Detail |
+| `PUT /api/automation/workflows/{id}` | Update name / trigger / condition / actions / enabled |
+| `DELETE /api/automation/workflows/{id}` | Delete (user kind only) |
+| `POST /api/automation/workflows/{id}/trigger` | Manual fire — same path as Run-Now button |
+| `GET /api/automation/workflows/{id}/runs` | Per-workflow execution history |
+| `GET /api/automation/workflow_runs` | Global execution history |
+| `GET /api/automation/workflow_runs/{run_id}` | Single run with full step traces |
+| `POST /api/automation/hooks/{id}?secret=…` | Webhook ingress for webhook-triggered workflows |
+| `GET /api/automation/actions/schema` | Action library + form schemas (UI form builder) |
+| `GET /api/automation/triggers/schema` | Trigger types + form schemas |
+| `GET /api/automation/events/known` | Known domain event topics |
+| `GET /api/automation/cron/preview?expr=…` | Next 5 fires for a cron expression |
+| `GET /api/automation/jobs` | Legacy — kept for back-compat |
 | `GET /api/automation/log` | Append-only event stream |
-| `GET /api/automation/settings` | Slack URL (masked) + event allow-list + thresholds |
+| `GET /api/automation/settings` | Slack URL (masked) + event allow-list + guards |
 | `POST /api/automation/slack/test` | Send a test notification |
 
 ### Datasets + benchmarks + system
@@ -681,6 +871,8 @@ The full surface is in `http://localhost:8000/docs`. Highlights by tag:
 | `GET /api/eval/scores` | Trend rows for the dashboard chart |
 | `GET /api/system/health` | Postgres + Redis + Ollama liveness |
 | `GET /api/system/gpu` | nvidia-smi output + unified-memory enrichment for GB10 |
+| `GET /api/system/storage` | Per-bucket usage (adapters / curated / ept / hf_cache / registry) + free disk |
+| `GET /api/system/env` | Environment + feature flags |
 
 ---
 
@@ -689,13 +881,15 @@ The full surface is in `http://localhost:8000/docs`. Highlights by tag:
 | Route | Page | Highlights |
 |---|---|---|
 | `/dashboard` | Operator overview | Evolution status + animated step indicator + Score Trends with Pareto annotations + Activity feed (DB-backed) + Live Events (in-process) |
-| `/adapters` | Adapter management | Master/detail with persistent panel · per-bench mini-bars · Compare workspace (radar + delta strip + same-prompt inference) |
+| `/adapters` | Adapter management | Master/detail with persistent panel · per-bench mini-bars · Compare workspace · **Promote to track** popover |
 | `/lineage` | Tree viewer | Synthetic Gen-0 base node · always-visible detail pane · per-generation timeline cards with Playground / Compare / Report actions |
 | `/playground` | Inference UI | react-markdown rendering · syntax-highlighted code · per-pane copy + metadata (`tok/s · latency · model · source`) · honest PEFT path |
+| `/forge` | **ForgeAgent** | 4 specialist track cards · classifier-routed query input · routing decision panel (method / confidence / matched keywords) · conversation history with markdown rendering · "Compare across all tracks" A/B mode · Sync-from-existing-champions button |
 | `/datasets` | Curated + uploaded | Live polling · category pills · sample preview (loads from Arrow shard) · upload validation |
 | `/benchmarks` | Score trends | Per-benchmark hero cards + per-generation table |
 | `/ept` | Population evolution | Control panel · population grid · lineage SVG · evolution chart · crossover inspector with "★ emergent" tagging |
-| `/automation` | Schedules + Slack + guards | Jobs grid · Slack panel (URL save + test + event allow-list) · Guards (regression / cleanup / memory) · live execution log |
+| `/automation` | **Workflow builder** | 3-column layout · workflow list (filter All/System/User/Active) · editor (trigger picker w/ cron-builder live preview · condition editor (none/simple/advanced JSON) · action chain w/ add/reorder/dup/delete · per-action condition gates) · run history w/ click-to-expand step traces · Slack panel + guards |
+| `/history` | **Run history** | Stats row (total/completed/running/failed/champions/avg) · filter pills + free-text search · 8s polling table · click-to-expand for per-bench score sparklines + full config JSON · archive button |
 | `/settings` | Connection management | Test Connections grid (api/postgres/redis/ollama/n8n/gpu) · API key field · model defaults |
 
 ---
@@ -823,20 +1017,26 @@ shortens the loop linearly.
 
 Done (live in `main`):
 - ✅ LangGraph evolution loop · self-distillation · Pareto + held-out guards
+- ✅ Per-task lm-eval metric extraction (GSM8K + HumanEval read correctly)
 - ✅ EPT package (crossover · mutation · tournament · UI)
 - ✅ Honest PEFT inference path
-- ✅ AutomationEngine (replaces n8n)
+- ✅ Workflow engine — triggers (cron/event/webhook/manual) · conditions · 9 actions · 3-column UI builder
+- ✅ Domain event bus + lifecycle event publishers in the runner
+- ✅ Rich Slack Block Kit notifications (header + score table with Δ + action buttons)
+- ✅ ForgeAgent — keyword + LLM classifier · 4 tracks · `/forge` page · auto-promotion on champion
+- ✅ Run history page (`/history`) — DAO + route + UI
+- ✅ `/api/schedule` route (legacy compat)
+- ✅ `/api/system/storage` route — per-bucket usage + free disk
+- ✅ Manual `Promote to track` override on AdaptersPage
 - ✅ Paper-export endpoints (PNG/SVG/LaTeX/JSON)
 - ✅ Live event feed + adaptive polling
-- ✅ Adapters / Lineage / Datasets pages — full master-detail UX
 
 In flight or pending:
-- 🔄 Phase-2 evidence run — `meta-llama/Llama-3.2-3B-Instruct × 3 gens` (in progress).
-- ⬜ ForgeAgent — track DAO is shipped, classifier-routed query surface (`/api/forge/query`) and dedicated page deferred.
-- ⬜ Run-history page (`/history`) — DAO is shipped, route file + UI not yet wired.
-- ⬜ `/api/schedule` route (DAO ready).
-- ⬜ `/api/system/storage` and `/cleanup` routes (logic in `automation._auto_cleanup`).
-- ⬜ Reproducible benchmark report (after Phase-2 lands).
+- 🔄 Phase-3 evidence run — `meta-llama/Llama-3.2-3B-Instruct × 3 gens` (`run-9d5f1b58`, started 2026-05-06 22:07 UTC).
+- ⬜ Reproducible benchmark report (after Phase-3 completes — needs the GSM8K/HumanEval fix to be exercised once for the methodology table).
+- ⬜ Discord + email Slack alternatives (deferred to "production-ready" pass per user direction; Slack covers ~95% of users today).
+- ⬜ Workflow editor — drag-to-reorder action chain (currently up/down arrows).
+- ⬜ Track-level evolution loop — currently each global champion auto-promotes into matching tracks; a dedicated loop *per track* (target only its benchmarks) would let tracks diverge intentionally.
 
 ---
 
