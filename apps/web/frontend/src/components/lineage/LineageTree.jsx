@@ -68,6 +68,8 @@ export default function LineageTree({
   edges: apiEdges,
   onNodeClick,
   selectedNode,
+  baseModel,           // optional: synthesizes a "Gen 0 · base" root node so the
+                        // tree always has 2+ nodes connected by an edge.
 }) {
   const svgRef = useRef(null);
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
@@ -75,8 +77,37 @@ export default function LineageTree({
   const [dragStart, setDragStart] = useState(null);
 
   const { layouted, edgeLines, viewBox, vbWidth, vbHeight } = useMemo(() => {
+    // Inject a synthetic Gen 0 representing the unmodified base model. This
+    // gives the tree a real "ancestor → descendant" shape on first generation
+    // and clarifies what every later checkpoint forked off of. The synthetic
+    // node carries `synthetic: true` so click handlers can avoid trying to
+    // open it as a real adapter.
+    const realNodes = Array.isArray(apiNodes) ? apiNodes : [];
+    const minRealGen = realNodes.length
+      ? Math.min(...realNodes.map((n) => Number(n.generation ?? 1)))
+      : 1;
+    const augmented =
+      baseModel && realNodes.length && minRealGen >= 1
+        ? [
+            {
+              id: '__base__',
+              label: `Base · ${baseModel}`,
+              generation: 0,
+              promoted: false,
+              scores: {},
+              avg_score: null,
+              is_champion: false,
+              parent_id: null,
+              method: 'base',
+              decision_reason: 'Untrained base model — origin of all lineage in this run.',
+              synthetic: true,
+            },
+            ...realNodes,
+          ]
+        : realNodes;
+
     const layoutedNodes =
-      Array.isArray(apiNodes) && apiNodes.length > 0 ? layoutApiNodes(apiNodes) : [];
+      augmented.length > 0 ? layoutApiNodes(augmented) : [];
     const byId = Object.fromEntries(layoutedNodes.map((n) => [n.id, n]));
 
     let lines = [];

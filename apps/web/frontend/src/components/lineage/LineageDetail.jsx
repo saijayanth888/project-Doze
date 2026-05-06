@@ -45,16 +45,14 @@ export default function LineageDetail({ node, onClose, allNodes = [] }) {
     <div
       className="animate-slide-right"
       style={{
+        // The page now embeds this panel inside an inline grid cell, so we
+        // fill the parent rather than absolute-positioning to the viewport.
         position: 'absolute',
-        top: 0,
-        right: 0,
-        width: 320,
-        height: '100%',
+        inset: 0,
         background: '#0c1018',
-        borderLeft: '1px solid #1e293b',
         padding: 20,
         overflowY: 'auto',
-        zIndex: 20,
+        zIndex: 1,
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -65,14 +63,22 @@ export default function LineageDetail({ node, onClose, allNodes = [] }) {
           <div style={{ fontFamily: 'Instrument Serif, Georgia, serif', fontSize: 24, color: '#f1f5f9' }}>
             Gen {node.generation}
           </div>
+          {node.id ? (
+            <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'JetBrains Mono, monospace', marginTop: 2 }}>
+              {node.id}
+            </div>
+          ) : null}
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', padding: 4 }}
-        >
-          <X size={16} />
-        </button>
+        {onClose ? (
+          <button
+            type="button"
+            onClick={onClose}
+            title="Reset selection to current champion"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', padding: 4 }}
+          >
+            <X size={16} />
+          </button>
+        ) : null}
       </div>
 
       <div style={{

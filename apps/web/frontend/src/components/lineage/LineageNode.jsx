@@ -1,10 +1,26 @@
 export default function LineageNode({ node, onClick, isSelected }) {
   const promoted = node.promoted;
   const isChampion = node.isChampion ?? node.is_champion;
-  const color = isChampion ? '#d4a574' : promoted ? '#76b900' : '#ef4444';
+  const isSynthetic = !!node.synthetic;
+  // Synthetic Gen-0 base nodes get a neutral grey so they read as "origin"
+  // instead of competing with the real promoted/discarded color language.
+  const color = isSynthetic
+    ? '#64748b'
+    : isChampion
+      ? '#d4a574'
+      : promoted
+        ? '#76b900'
+        : '#ef4444';
   const scoreMap = node.scores || node.childScores || {};
   const scoreVals = Object.values(scoreMap).filter((v) => typeof v === 'number');
   const avgScore = scoreVals.length ? scoreVals.reduce((a, b) => a + b, 0) / scoreVals.length : (node.avg_score ?? 0);
+
+  // Compact short label for the base model (e.g. "Llama-3.2-3B-Instruct").
+  const baseShort = (() => {
+    const lbl = String(node.label || '');
+    const tail = lbl.split('/').pop() || lbl;
+    return tail.length > 22 ? tail.slice(0, 22) + '…' : tail;
+  })();
 
   return (
     <g
@@ -22,10 +38,19 @@ export default function LineageNode({ node, onClick, isSelected }) {
       {/* Node circle */}
       <circle
         cx={0} cy={0} r={16}
-        fill={isChampion ? 'rgba(212,165,116,0.15)' : promoted ? 'rgba(118,185,0,0.12)' : 'rgba(239,68,68,0.08)'}
+        fill={
+          isSynthetic
+            ? 'rgba(100,116,139,0.10)'
+            : isChampion
+              ? 'rgba(212,165,116,0.15)'
+              : promoted
+                ? 'rgba(118,185,0,0.12)'
+                : 'rgba(239,68,68,0.08)'
+        }
         stroke={color}
-        strokeWidth={promoted ? 2 : 1}
-        opacity={promoted ? 1 : 0.5}
+        strokeWidth={promoted || isChampion ? 2 : 1}
+        strokeDasharray={isSynthetic ? '3 3' : null}
+        opacity={isSynthetic ? 0.75 : promoted ? 1 : 0.5}
       />
 
       {/* Crown for champion */}
@@ -44,10 +69,10 @@ export default function LineageNode({ node, onClick, isSelected }) {
         fontWeight={600}
         fill={color}
       >
-        G{node.generation}
+        {isSynthetic ? 'BASE' : `G${node.generation}`}
       </text>
 
-      {/* Score below */}
+      {/* Sub-label below: short model name for synthetic, score % for real gens */}
       <text
         x={0} y={30}
         textAnchor="middle"
@@ -55,7 +80,11 @@ export default function LineageNode({ node, onClick, isSelected }) {
         fontFamily="JetBrains Mono"
         fill="#64748b"
       >
-        {avgScore <= 1 ? `${(avgScore * 100).toFixed(0)}%` : `${Number(avgScore).toFixed(0)}%`}
+        {isSynthetic
+          ? baseShort
+          : avgScore <= 1
+            ? `${(avgScore * 100).toFixed(0)}%`
+            : `${Number(avgScore).toFixed(0)}%`}
       </text>
     </g>
   );
