@@ -412,6 +412,10 @@ async def get_dataset(dataset_id: str) -> DatasetPreview:
                 meta = {}
 
     samples: list[dict[str, str]] = []
+    total: int | None = None
+    categories: list[str] = []
+
+    # 1) Custom uploads: dataset.jsonl
     jl = path_dir / "dataset.jsonl"
     if jl.is_file():
         with jl.open(encoding="utf-8") as f:
@@ -427,9 +431,58 @@ async def get_dataset(dataset_id: str) -> DatasetPreview:
                         {
                             "instruction": str(obj.get("instruction", "")),
                             "response": str(obj.get("response", "")),
+                            "category": str(obj.get("category", "")),
+                            "source": str(obj.get("source", "")),
                         }
                     )
                 except json.JSONDecodeError:
                     continue
 
-    return DatasetPreview(dataset_id=dataset_id, kind=kind, metadata=meta, samples=samples)
+    # 2) Curated datasets: HuggingFace Arrow shards from `Dataset.save_to_disk()`.
+    # The previous implementation only checked dataset.jsonl, so curated dirs
+    # always returned `samples: []` — making the preview pane look broken.
+    if not samples:
+        try:
+            from datasets import Dataset  # type: ignore
+            ds = Dataset.load_from_disk(str(path_dir))
+            total = int(len(ds))
+            preview_n = min(10, total)
+            for i in range(preview_n):
+                row = ds[i]
+                samples.append(
+                    {
+                        "instruction": str(row.get("instruction", ""))[:1500],
+                        "response": str(row.get("response", ""))[:1500],
+                        "category": str(row.get("category", "") or ""),
+                        "source": str(row.get("source", "") or row.get("dataset_name", "") or ""),
+                    }
+                )
+            # Distinct categories actually present in the data, not just metadata.
+            try:
+                cats_seen = sorted(set(str(c) for c in ds["category"] if c))
+                categories = cats_seen[:32]
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.debug("[datasets] arrow preview skipped for %s: %s", dataset_id, exc)
+
+    # Fall back to the sidecar's category list if we couldn't read from arrow.
+    if not categories:
+        sidecar = path_dir / "mf_meta.json"
+        if sidecar.is_file():
+            try:
+                m = json.loads(sidecar.read_text(encoding="utf-8"))
+                categories = [str(c) for c in (m.get("categories") or [])]
+                if total is None:
+                    total = int(m.get("num_samples") or 0) or None
+            except Exception:
+                pass
+
+    return DatasetPreview(
+        dataset_id=dataset_id,
+        kind=kind,
+        metadata=meta,
+        samples=samples,
+        total=total,
+        categories=categories,
+    )

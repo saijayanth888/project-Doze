@@ -29,6 +29,8 @@ class DatasetPreview(BaseModel):
     kind: str
     metadata: dict[str, Any] = Field(default_factory=dict)
     samples: list[dict[str, str]] = Field(default_factory=list)
+    total: int | None = None
+    categories: list[str] = Field(default_factory=list)
 
 
 class DatasetUploadResponse(BaseModel):
