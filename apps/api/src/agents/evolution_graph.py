@@ -466,6 +466,11 @@ def build_graph(
             label=f"Training LoRA adapter (gen {state['generation']})",
             sub=f"base={cfg.get('base_model')} · batch={cfg.get('batch_size')} · LR={cfg.get('learning_rate')}",
         )
+        # Surface the in-progress step to Postgres immediately. _emit at the
+        # tail of the node only fires after training completes (~5 min), so
+        # /api/evolve/status would otherwise stay on the *previous* step for
+        # the entire run of this node.
+        await _emit(state, "train_adapter")
         t0 = time.perf_counter()
         result: TrainingResult = await training.train(
             run_id=state["run_id"],
@@ -495,6 +500,11 @@ def build_graph(
             label="Evaluating across benchmarks",
             sub="lm-eval mmlu · arc_challenge · hellaswag · gsm8k · humaneval",
         )
+        # Surface the in-progress step to Postgres immediately. lm-eval-harness
+        # takes ~2.5 hours per generation; without this early emit the dashboard
+        # would show "train_adapter" the whole time. The tail _emit below still
+        # fires once eval finishes, recording the same step idempotently.
+        await _emit(state, "evaluate")
         t0 = time.perf_counter()
         result: EvalResult = await eval_backend.evaluate(
             run_id=state["run_id"],
