@@ -514,21 +514,36 @@ def build_graph(
         )
         child_avg = _avg(state.get("child_scores", {}))
         champion_avg = state.get("champion_avg", 0.0)
-        # The first generation has no champion to beat — promote any
-        # successful run. Subsequent generations must outscore the
-        # current champion by at least 0.001 to avoid noise-driven
-        # promotions.
-        if champion_avg <= 0.0:
+        parent = state.get("parent_scores") or {}
+        child = state.get("child_scores") or {}
+
+        # ── Multi-objective Pareto-dominant selection ────────────────────
+        # The previous "avg score went up" rule promoted models that gained
+        # 5% on MMLU but lost 10% on GSM8K. Pareto dominance prevents that:
+        # promote only if better on ≥1 benchmark AND not worse on any
+        # benchmark by more than the threshold (default 0.01, override via
+        # MODELFORGE_PARETO_THRESHOLD). First generation auto-promotes
+        # because there's no parent to compare against.
+        from services.pareto_selector import is_pareto_dominant
+        pareto = is_pareto_dominant(child, parent)
+        state["pareto_report"] = pareto.to_dict()
+
+        if not parent or champion_avg <= 0.0:
             state["decision"] = "promote"
             state["decision_reason"] = "No prior champion — promoting initial generation"
-        elif child_avg >= champion_avg + 0.001:
+        elif pareto.promote:
             state["decision"] = "promote"
-            state["decision_reason"] = f"avg {child_avg:.4f} ≥ champion {champion_avg:.4f} + 0.001"
+            state["decision_reason"] = pareto.reason
         else:
             state["decision"] = "discard"
-            state["decision_reason"] = (
-                f"avg {child_avg:.4f} did not beat champion {champion_avg:.4f}"
-            )
+            state["decision_reason"] = pareto.reason
+
+        # Log the avg context too — helps debugging when Pareto disagrees
+        # with what the dashboard's avg-trend chart implies.
+        logger.info(
+            "[pareto] child_avg=%.4f champion_avg=%.4f decision=%s — %s",
+            child_avg, champion_avg, state["decision"], pareto.reason,
+        )
 
         # Per-benchmark regression guard: a model that gains 5% on MMLU but
         # loses 10% on GSM8K is a bad trade even when the average improves.

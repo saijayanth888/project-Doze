@@ -7,6 +7,8 @@ from api.routes import (
     datasets,
     evaluation,
     evolution,
+    experiments,
+    exports,
     inference,
     lineage,
     models,
@@ -25,4 +27,6 @@ api_router.include_router(datasets.router, prefix="/datasets", tags=["Datasets"]
 api_router.include_router(configs.router, prefix="/configs", tags=["Configs"])
 api_router.include_router(system.router, prefix="/system", tags=["System"])
 api_router.include_router(automation.router, prefix="/automation", tags=["Automation"])
+api_router.include_router(experiments.router, prefix="/experiments", tags=["Experiments"])
+api_router.include_router(exports.router, prefix="/export", tags=["Exports"])
 api_router.include_router(websocket.router, tags=["WebSocket"])

@@ -183,6 +183,7 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     "trained_benchmark_delta": s.get("trained_benchmark_delta"),
                     "held_out_benchmark_delta": s.get("held_out_benchmark_delta"),
                     "regression_report": s.get("regression_report"),
+                    "pareto_report": s.get("pareto_report"),
                     "training_seconds": float(s.get("training_seconds") or 0.0),
                     "eval_seconds": float(s.get("eval_seconds") or 0.0),
                 },

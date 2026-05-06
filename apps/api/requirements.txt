@@ -20,6 +20,8 @@ filelock==3.16.1
 # In-process automation engine — replaces n8n cron triggers.
 apscheduler>=3.10,<4
 croniter>=2.0,<3
+# Paper-grade chart exports (/api/export/evolution-curves, lineage-tree).
+matplotlib>=3.8,<4
 
 # GPU dependencies (DGX Spark only)
 torch>=2.4.0
