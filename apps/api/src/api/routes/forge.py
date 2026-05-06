@@ -109,6 +109,90 @@ async def forge_query(
     return answer.to_dict()
 
 
+@router.post("/sync_tracks")
+async def sync_tracks(db: LineageDB = Depends(get_db)) -> dict[str, Any]:
+    """Retroactively promote the best existing adapter into each track.
+
+    Walks all promoted generations and, for each track, picks the one whose
+    score average over the track's target benchmarks is highest. Beats the
+    "next-run will fix it" pattern when you've upgraded the eval pipeline
+    and want existing champions to flow into matching tracks.
+
+    Returns the list of tracks that got an updated champion. Idempotent —
+    re-running without new winners is a no-op.
+    """
+    from pathlib import Path
+
+    from agents.runner import _avg_subset
+    from config.settings import settings as _settings
+
+    tracks = await db.list_tracks()
+    enabled = [t for t in tracks if t.get("enabled")]
+    if not enabled:
+        return {"updated": [], "reason": "no enabled tracks"}
+
+    gens = await db.get_all_generations(include_archived=False)
+    promoted = [g for g in (gens or []) if g.get("promoted") or g.get("is_champion")]
+    if not promoted:
+        return {"updated": [], "reason": "no promoted generations"}
+
+    # Normalize JSONB strings (engine.db codepath sometimes returns them raw).
+    import json as _json
+    for g in promoted:
+        cs = g.get("child_scores")
+        if isinstance(cs, str):
+            try:
+                g["child_scores"] = _json.loads(cs)
+            except Exception:
+                g["child_scores"] = {}
+
+    updated: list[dict[str, Any]] = []
+    for track in enabled:
+        targets = list(track.get("target_benchmarks") or [])
+        if not targets:
+            continue
+        best = None
+        best_avg: float | None = None
+        for g in promoted:
+            avg = _avg_subset(g.get("child_scores") or {}, targets)
+            if avg is None or avg <= 0:
+                continue
+            if best_avg is None or avg > best_avg:
+                best, best_avg = g, avg
+        if best is None:
+            continue
+        prev_avg = _avg_subset(track.get("champion_scores") or {}, targets)
+        if prev_avg is not None and best_avg <= prev_avg:
+            continue
+
+        run_id = str(best.get("run_id") or "")
+        generation = int(best.get("generation") or 0)
+        adapter_path = (
+            Path(_settings.resolve_data_root()) / "adapters" / run_id / f"gen-{generation}"
+        ).as_posix()
+        try:
+            await db.update_track_champion(
+                track["track_id"],
+                run_id=run_id, generation=generation,
+                adapter_path=adapter_path,
+                scores=best.get("child_scores") or {},
+            )
+            updated.append({
+                "track_id": track["track_id"],
+                "track_name": track.get("name"),
+                "run_id": run_id,
+                "generation": generation,
+                "avg": round(best_avg, 4),
+                "prev_avg": round(prev_avg, 4) if prev_avg is not None else None,
+                "target_benchmarks": targets,
+            })
+        except Exception as exc:
+            logger.warning("sync_tracks: update_track_champion(%s) failed: %s",
+                           track["track_id"], exc)
+
+    return {"updated": updated, "tracks_evaluated": len(enabled)}
+
+
 @router.post("/compare")
 async def forge_compare(
     body: dict[str, Any] = Body(...),

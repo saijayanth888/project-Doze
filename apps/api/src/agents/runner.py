@@ -64,6 +64,90 @@ def _emit_event(topic: str, payload: dict | None = None) -> None:
         bus.publish_nowait(topic, payload or {})
     except Exception:
         pass
+
+
+def _avg_subset(scores: dict | None, keys: list[str]) -> float | None:
+    """Average ``scores[k]`` across only the keys present and numeric."""
+    if not isinstance(scores, dict):
+        return None
+    vals = [float(scores[k]) for k in keys if isinstance(scores.get(k), (int, float))]
+    return (sum(vals) / len(vals)) if vals else None
+
+
+async def _maybe_promote_to_tracks(
+    db: LineageDB,
+    *,
+    run_id: str,
+    generation: int,
+    adapter_path: str | None,
+    child_scores: dict,
+) -> None:
+    """For each enabled track, promote the new champion if it beats the
+    current track champion *on that track's target benchmarks*.
+
+    A track's owner is whichever adapter is best on its target benches —
+    independent of which run produced it. A run that targeted a broad set of
+    benches can win multiple tracks; a run that targeted only one bench
+    wins at most that track. Auto-promotion is skipped when the new
+    champion has no scores for any of the track's target benches (avoids
+    promoting on the broken-extraction zeros we saw in Phase-2).
+    """
+    try:
+        tracks = await db.list_tracks()
+    except Exception as exc:
+        logger.warning("[track] list_tracks failed: %s", exc)
+        return
+    for track in tracks:
+        if not track.get("enabled"):
+            continue
+        targets = list(track.get("target_benchmarks") or [])
+        if not targets:
+            continue
+        new_avg = _avg_subset(child_scores, targets)
+        if new_avg is None or new_avg <= 0:
+            # No usable scores for this track's benches — skip.
+            continue
+        prev_scores = track.get("champion_scores") or {}
+        prev_avg = _avg_subset(prev_scores, targets) if prev_scores else None
+        if prev_avg is not None and new_avg <= prev_avg:
+            continue
+        try:
+            await db.update_track_champion(
+                track["track_id"],
+                run_id=run_id,
+                generation=int(generation),
+                adapter_path=adapter_path,
+                scores=child_scores,
+            )
+            try:
+                await db.insert_track_generation({
+                    "track_id": track["track_id"],
+                    "generation": int(generation),
+                    "run_id": run_id,
+                    "scores": child_scores,
+                    "promoted": True,
+                    "adapter_path": adapter_path,
+                })
+            except Exception as exc:
+                logger.debug("[track] insert_track_generation failed: %s", exc)
+            logger.info(
+                "[track] %s now owned by %s::gen%s — avg over %s: %.4f (was %s)",
+                track["track_id"], run_id, generation, targets, new_avg,
+                f"{prev_avg:.4f}" if prev_avg is not None else "n/a",
+            )
+            _emit_event("track.promoted", {
+                "track_id": track["track_id"],
+                "track_name": track.get("name"),
+                "run_id": run_id,
+                "generation": int(generation),
+                "scores": dict(child_scores),
+                "new_avg": round(new_avg, 4),
+                "prev_avg": round(prev_avg, 4) if prev_avg is not None else None,
+                "target_benchmarks": targets,
+            })
+        except Exception as exc:
+            logger.warning("[track] update_track_champion(%s) failed: %s",
+                           track["track_id"], exc)
 from services.n8n_webhook import (
     build_evolution_payload,
     emit_evolution_complete,
@@ -254,6 +338,20 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     )
                 except Exception as exc:
                     logger.warning("[evolution %s] failed to update champion registry: %s", run_id, exc)
+
+                # Auto-promote this champion into any track it beats on its
+                # target benchmarks. Lights up the PEFT inference path on
+                # /forge for that track. Best-effort — never aborts the run.
+                try:
+                    await _maybe_promote_to_tracks(
+                        db,
+                        run_id=run_id,
+                        generation=int(s["generation"]),
+                        adapter_path=s.get("adapter_path"),
+                        child_scores=dict(s.get("child_scores") or {}),
+                    )
+                except Exception as exc:
+                    logger.warning("[evolution %s] track auto-promotion failed: %s", run_id, exc)
 
             evt = "champion_promoted" if s.get("decision") == "promote" else "generation_complete"
             base_model = str((config or {}).get("base_model") or "unknown")

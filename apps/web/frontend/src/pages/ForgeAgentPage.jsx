@@ -366,6 +366,30 @@ export default function ForgeAgentPage() {
     }
   }, [history.length]);
 
+  async function syncTracks() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await apiFetch('/api/forge/sync_tracks', { method: 'POST', body: '{}' });
+      const n = (r?.updated || []).length;
+      if (n > 0) {
+        const summary = (r.updated || []).map((u) =>
+          `${u.track_id}: ${u.run_id}::gen${u.generation} (avg ${u.avg})`
+        ).join(' · ');
+        setErr(null);
+        // Reuse the "err" pill area for a positive flash via console only;
+        // the track grid will refresh and reflect the change.
+        console.log('[forge] sync_tracks promoted:', summary);
+      }
+      await loadTracks();
+      if (n === 0) setErr('Sync ran — no track had a better champion to promote');
+    } catch (e) {
+      setErr(`Sync failed: ${e?.message || 'unknown'}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function send({ compareMode = false } = {}) {
     const p = prompt.trim();
     if (!p || busy) return;
@@ -431,7 +455,10 @@ export default function ForgeAgentPage() {
           <span style={{ marginLeft: 12, fontFamily: F.mono, fontSize: 11, color: C.txtM }}>
             {totalTracksWithAdapters}/{tracks.length} with champion adapters
           </span>
-          <button type="button" onClick={loadTracks} style={{ ...btn('ghost'), marginLeft: 'auto' }}>
+          <button type="button" onClick={syncTracks} disabled={busy} style={{ ...btn('default', busy), marginLeft: 'auto' }}>
+            <Zap size={11} /> Sync from existing champions
+          </button>
+          <button type="button" onClick={loadTracks} style={btn('ghost')}>
             <RefreshCw size={11} /> Refresh
           </button>
         </div>
