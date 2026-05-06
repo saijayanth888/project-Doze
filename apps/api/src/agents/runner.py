@@ -152,6 +152,18 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     "duration_seconds": (
                         s.get("training_seconds", 0.0) + s.get("eval_seconds", 0.0)
                     ),
+                    # ── Methodology metadata for the paper (Phase-3 patch) ──
+                    # Also persisted in the generation row's `data` JSONB so
+                    # the read path can recover them without a schema migration.
+                    "curated_sample_count": int(s.get("curated_sample_count") or 0),
+                    "self_generated_count": int(s.get("self_generated_count") or 0),
+                    "trained_benchmarks": list(s.get("trained_benchmarks") or []),
+                    "held_out_benchmarks": list(s.get("held_out_benchmarks") or []),
+                    "trained_benchmark_delta": s.get("trained_benchmark_delta"),
+                    "held_out_benchmark_delta": s.get("held_out_benchmark_delta"),
+                    "regression_report": s.get("regression_report"),
+                    "training_seconds": float(s.get("training_seconds") or 0.0),
+                    "eval_seconds": float(s.get("eval_seconds") or 0.0),
                 },
             )
             for benchmark, score in s.get("child_scores", {}).items():
