@@ -184,11 +184,46 @@ export default function TopBar({ champion = null }) {
           </div>
         )}
 
-        {/* Active runs (design handoff) */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <LiveDot color={evolve?.status === 'running' ? C.acc : undefined} idle={!evolve || evolve.status !== 'running'} />
-          <span style={{ fontFamily: F.mono, fontSize: 11, color: evolve?.status === 'running' ? C.acc : C.txtM }}>
-            {evolve?.status === 'running' ? '1 run active' : 'idle'}
+        {/* Active runs */}
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+          title={
+            evolve?.status === 'running'
+              ? `Evolution generation ${evolve.generation ?? '?'} · step ${evolve.current_step || '…'}`
+              : 'No active evolution'
+          }
+        >
+          {evolve?.status === 'running' ? (
+            // Pulsing green dot when a run is active — gives the user a real
+            // glance signal vs the neutral "idle" dot.
+            <span style={{ position: 'relative', width: 10, height: 10, display: 'inline-block' }}>
+              <span
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  borderRadius: 999,
+                  background: C.acc,
+                  animation: 'mf-topbar-pulse 1.4s ease-out infinite',
+                  opacity: 0.7,
+                }}
+              />
+              <span
+                style={{
+                  position: 'absolute',
+                  inset: 2,
+                  borderRadius: 999,
+                  background: C.acc,
+                  boxShadow: `0 0 8px ${C.acc}`,
+                }}
+              />
+            </span>
+          ) : (
+            <LiveDot idle />
+          )}
+          <span style={{ fontFamily: F.mono, fontSize: 11, color: evolve?.status === 'running' ? C.acc : C.txtM, fontWeight: evolve?.status === 'running' ? 600 : 400 }}>
+            {evolve?.status === 'running'
+              ? `Gen ${evolve.generation ?? '?'} running…`
+              : 'idle'}
           </span>
         </div>
 

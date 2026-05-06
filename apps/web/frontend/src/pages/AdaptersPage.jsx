@@ -2,11 +2,13 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
+  Crown,
   Layers,
   RotateCcw,
   Server,
   Trash2,
   GitCompare,
+  Sparkles,
 } from 'lucide-react';
 import {
   Radar,
@@ -72,7 +74,40 @@ export default function AdaptersPage() {
     load();
   }, [load]);
 
-  const rows = data?.adapters || [];
+  // Pin the champion to the top, then promoted, then archived. Saves the user
+  // from scrolling past 25 archived rows to find the row they actually care about.
+  const rows = useMemo(() => {
+    const list = data?.adapters || [];
+    const order = (a) => (a.is_champion ? 0 : a.promoted ? 1 : a.status === 'archived' ? 3 : 2);
+    return [...list].sort((a, b) => {
+      const o = order(a) - order(b);
+      if (o !== 0) return o;
+      return (b.generation ?? 0) - (a.generation ?? 0);
+    });
+  }, [data]);
+
+  const archivedCount = useMemo(
+    () => (data?.adapters || []).filter((r) => r.status === 'archived' && !r.is_champion).length,
+    [data],
+  );
+
+  async function cleanupArchived() {
+    const archived = (data?.adapters || []).filter((r) => r.status === 'archived' && !r.is_champion);
+    if (!archived.length) return;
+    if (!window.confirm(`Delete ${archived.length} archived adapter${archived.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    setBusy('cleanup');
+    try {
+      // Sequential deletes — adapter IDs are independent but the API serializes
+      // disk writes anyway, parallel doesn't help and risks rate-limit noise.
+      for (const a of archived) {
+        try { await deleteAdapter(a.adapter_id); } catch { /* keep going */ }
+      }
+      await load();
+    } finally {
+      setBusy('');
+    }
+  }
+
   const radarData = useMemo(() => {
     if (!aId || !bId) return [];
     const ra = rows.find((r) => r.adapter_id === aId);
@@ -189,6 +224,32 @@ export default function AdaptersPage() {
           <div style={{ fontSize: 10, color: C.txtM, fontFamily: F.mono, letterSpacing: 1 }}>CHAMPION</div>
           <div style={{ fontFamily: F.mono, fontSize: 13, color: C.txtP }}>{data?.champion_id || '—'}</div>
         </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          {archivedCount > 0 ? (
+            <button
+              type="button"
+              onClick={cleanupArchived}
+              disabled={busy === 'cleanup'}
+              title={`Delete all ${archivedCount} archived adapters from failed/superseded runs.`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '7px 12px',
+                background: busy === 'cleanup' ? C.bgE : 'transparent',
+                border: `1px solid ${C.danger}55`,
+                borderRadius: 6,
+                color: C.danger,
+                cursor: busy === 'cleanup' ? 'not-allowed' : 'pointer',
+                fontFamily: F.ui,
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              <Trash2 size={13} /> {busy === 'cleanup' ? 'Cleaning…' : `Clean up ${archivedCount} archived`}
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div style={{ overflowX: 'auto', border: `1px solid ${C.border}`, borderRadius: 8, background: C.bgC }}>
@@ -212,9 +273,26 @@ export default function AdaptersPage() {
                 </td>
               </tr>
             ) : (
-              rows.map((row) => (
+              rows.map((row) => {
+                const isChamp = !!row.is_champion;
+                const isArchived = row.status === 'archived';
+                const statusTone = isChamp
+                  ? { bg: 'rgba(118,185,0,0.18)', fg: C.acc, dot: C.acc }
+                  : row.promoted
+                    ? { bg: 'rgba(34,197,94,0.15)', fg: C.success, dot: C.success }
+                    : isArchived
+                      ? { bg: 'rgba(100,116,139,0.15)', fg: C.txtM, dot: C.txtM }
+                      : { bg: C.bgE, fg: C.txtS, dot: C.ind };
+                return (
                 <Fragment key={row.adapter_id}>
-                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <tr
+                    style={{
+                      borderBottom: `1px solid ${C.border}`,
+                      background: isChamp ? 'linear-gradient(90deg, rgba(118,185,0,0.10), transparent 60%)' : 'transparent',
+                      borderLeft: isChamp ? `3px solid ${C.acc}` : '3px solid transparent',
+                      opacity: isArchived ? 0.65 : 1,
+                    }}
+                  >
                   <td style={{ padding: 8 }}>
                     <button
                       type="button"
@@ -233,25 +311,35 @@ export default function AdaptersPage() {
                       {expanded[row.adapter_id] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                     </button>
                   </td>
-                  <td style={{ padding: 12, fontFamily: F.mono, color: C.txtP }}>{row.generation}</td>
-                  <td style={{ padding: 12, fontFamily: F.mono, color: C.txtS }}>{row.run_id}</td>
-                  <td style={{ padding: 12, color: C.acc }}>{avgScore(row.scores)}</td>
-                  <td style={{ padding: 12 }}>{Number(row.size_mb || 0).toFixed(1)}</td>
+                  <td style={{ padding: 12, fontFamily: F.mono, color: isChamp ? C.acc : C.txtP }}>
+                    {isChamp ? <Crown size={12} style={{ marginRight: 6, verticalAlign: -1 }} /> : null}
+                    {row.generation}
+                  </td>
+                  <td style={{ padding: 12, fontFamily: F.mono, color: isChamp ? C.txtP : C.txtS }}>{row.run_id}</td>
+                  <td style={{ padding: 12, color: C.acc, fontFamily: F.mono, fontWeight: isChamp ? 600 : 400 }}>{avgScore(row.scores)}</td>
+                  <td style={{ padding: 12, fontFamily: F.mono, color: C.txtM }}>{Number(row.size_mb || 0).toFixed(1)}</td>
                   <td style={{ padding: 12 }}>
                     <span
                       style={{
-                        padding: '2px 8px',
-                        borderRadius: 4,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        padding: '3px 9px',
+                        borderRadius: 999,
                         fontSize: 11,
-                        background:
-                          row.status === 'champion'
-                            ? C.accDim
-                            : row.promoted
-                              ? C.successDim
-                              : C.bgE,
-                        color: row.status === 'champion' ? C.acc : C.txtS,
+                        fontFamily: F.ui,
+                        fontWeight: 600,
+                        textTransform: 'capitalize',
+                        background: statusTone.bg,
+                        color: statusTone.fg,
+                        border: `1px solid ${statusTone.fg}33`,
                       }}
                     >
+                      {isChamp ? (
+                        <Crown size={11} />
+                      ) : (
+                        <span style={{ width: 6, height: 6, borderRadius: 3, background: statusTone.dot }} />
+                      )}
                       {row.status}
                     </span>
                   </td>
@@ -323,7 +411,8 @@ export default function AdaptersPage() {
                   </tr>
                   )}
                 </Fragment>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>

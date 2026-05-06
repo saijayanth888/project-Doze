@@ -1,11 +1,133 @@
 import { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 const INFERENCE_STORAGE_KEY = 'mf.playground.inference.v1';
-import { RotateCcw, Zap, Trophy, Save } from 'lucide-react';
+import { Check, Copy, RotateCcw, Zap, Trophy, Save } from 'lucide-react';
 import { apiFetch, fetchAdapters, fetchDatasets, getApiKey, savePairToDataset, serveAdapter, setApiKey } from '../../config/api';
 import { C, F } from '../../config/colors';
 import DNALoader from '../shared/DNALoader';
 import MagneticButton from '../shared/MagneticButton';
+
+const MARKDOWN_COMPONENTS = {
+  code({ inline, className, children, ...props }) {
+    const match = /language-(\w+)/.exec(className || '');
+    if (!inline && match) {
+      return (
+        <SyntaxHighlighter
+          PreTag="div"
+          language={match[1]}
+          style={vscDarkPlus}
+          customStyle={{
+            margin: '8px 0',
+            padding: '12px 14px',
+            borderRadius: 8,
+            fontSize: 12,
+            background: '#0b0f17',
+          }}
+          {...props}
+        >
+          {String(children).replace(/\n$/, '')}
+        </SyntaxHighlighter>
+      );
+    }
+    return (
+      <code
+        className={className}
+        style={{
+          background: 'rgba(118,185,0,0.10)',
+          padding: '1px 5px',
+          borderRadius: 4,
+          fontFamily: 'JetBrains Mono, monospace',
+          fontSize: 12,
+          color: '#e2e8f0',
+        }}
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  },
+  p({ children }) {
+    return <p style={{ margin: '0 0 10px', lineHeight: 1.65 }}>{children}</p>;
+  },
+  ul({ children }) {
+    return <ul style={{ margin: '0 0 10px', paddingLeft: 22, lineHeight: 1.65 }}>{children}</ul>;
+  },
+  ol({ children }) {
+    return <ol style={{ margin: '0 0 10px', paddingLeft: 22, lineHeight: 1.65 }}>{children}</ol>;
+  },
+  h1({ children }) { return <h3 style={{ fontSize: 16, margin: '12px 0 6px', color: '#f1f5f9' }}>{children}</h3>; },
+  h2({ children }) { return <h4 style={{ fontSize: 14, margin: '12px 0 6px', color: '#f1f5f9' }}>{children}</h4>; },
+  h3({ children }) { return <h5 style={{ fontSize: 13, margin: '10px 0 4px', color: '#f1f5f9' }}>{children}</h5>; },
+  blockquote({ children }) {
+    return (
+      <blockquote
+        style={{
+          margin: '10px 0',
+          padding: '6px 12px',
+          borderLeft: '3px solid #76b900',
+          background: 'rgba(118,185,0,0.05)',
+          color: '#cbd5e1',
+        }}
+      >
+        {children}
+      </blockquote>
+    );
+  },
+  table({ children }) {
+    return (
+      <div style={{ overflowX: 'auto', margin: '10px 0' }}>
+        <table style={{ borderCollapse: 'collapse', fontSize: 12, color: '#cbd5e1' }}>{children}</table>
+      </div>
+    );
+  },
+  th({ children }) {
+    return <th style={{ padding: '6px 10px', borderBottom: '1px solid #1e293b', textAlign: 'left', color: '#94a3b8' }}>{children}</th>;
+  },
+  td({ children }) {
+    return <td style={{ padding: '6px 10px', borderBottom: '1px solid #1e293b' }}>{children}</td>;
+  },
+};
+
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch {
+          /* clipboard API may be denied; surface nothing rather than failing loudly */
+        }
+      }}
+      title={copied ? 'Copied' : 'Copy response'}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '4px 8px',
+        background: 'transparent',
+        border: '1px solid #1e293b',
+        borderRadius: 6,
+        color: copied ? '#76b900' : '#64748b',
+        cursor: 'pointer',
+        fontSize: 11,
+        fontFamily: 'JetBrains Mono, monospace',
+        transition: 'color 200ms, border-color 200ms',
+      }}
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+      {copied ? 'Copied' : 'Copy'}
+    </button>
+  );
+}
 
 /** Ollama `model` param must be a local tag, not a HuggingFace repo id. */
 function ollamaBaseTagFromRegistryBase(base) {
@@ -200,16 +322,23 @@ export default function InferencePane() {
         setBadge(targetId);
       }
 
-      const result = await apiFetch('/api/infer/compare', {
-        method: 'POST',
-        body: JSON.stringify({
-          prompt,
-          model_a: baseModel,
-          model_b: modelBTag || baseModel,
-          max_tokens: 256,
-          temperature: 0.7,
-        }),
-      });
+      const result = await apiFetch(
+        '/api/infer/compare',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            prompt,
+            model_a: baseModel,
+            model_b: modelBTag || baseModel,
+            max_tokens: 256,
+            temperature: 0.7,
+          }),
+        },
+        // Compare runs two Ollama generations sequentially; cold-start of a
+        // model can push the total well past the 15s default. 90s is generous
+        // enough that real failures still surface but cold loads succeed.
+        { timeoutMs: 90_000 },
+      );
 
       if (result?.base && result?.champion) {
         setResponses({
@@ -508,11 +637,25 @@ export default function InferencePane() {
       ) : null}
 
       {(submitted || loading) && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, flex: 1 }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: 16,
+            flex: 1,
+            minHeight: 360,
+          }}
+        >
           {[
             { key: 'base', label: 'BASE MODEL', color: '#818cf8', subtitle: 'model_a', crown: false },
             { key: 'champion', label: 'ADAPTER / CHAMPION', color: '#76b900', subtitle: 'model_b', crown: true },
-          ].map(({ key, label, color, subtitle, crown }) => (
+          ].map(({ key, label, color, subtitle, crown }) => {
+            const m = meta[key];
+            const tokensPerSec =
+              m?.tokens != null && m?.latency_ms != null && Number(m.latency_ms) > 0
+                ? (Number(m.tokens) / (Number(m.latency_ms) / 1000)).toFixed(1)
+                : null;
+            return (
             <div
               key={key}
               style={{
@@ -521,9 +664,13 @@ export default function InferencePane() {
                 borderRadius: 12,
                 padding: 16,
                 transition: 'border-color 400ms',
+                display: 'flex',
+                flexDirection: 'column',
+                minHeight: 360,
+                maxHeight: 'calc(100vh - 320px)',
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
                 <div>
                   <div
                     style={{ fontSize: 10, fontFamily: 'JetBrains Mono', color, letterSpacing: 1 }}
@@ -531,20 +678,27 @@ export default function InferencePane() {
                     {label}
                   </div>
                   <div style={{ fontSize: 12, color: '#64748b', fontFamily: 'Outfit', marginTop: 2 }}>
-                    {subtitle}
+                    {m?.model || subtitle}
                   </div>
                 </div>
-                {crown && (
-                  <Trophy size={18} color={color} style={{ animation: 'crown-float 3s ease-in-out infinite' }} aria-hidden />
-                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {!loading && responses[key] ? <CopyButton text={responses[key]} /> : null}
+                  {crown && (
+                    <Trophy size={18} color={color} style={{ animation: 'crown-float 3s ease-in-out infinite' }} aria-hidden />
+                  )}
+                </div>
               </div>
               <div
                 style={{
+                  flex: 1,
                   minHeight: 120,
+                  maxHeight: '100%',
+                  overflowY: 'auto',
                   fontSize: 13,
                   lineHeight: 1.7,
-                  color: '#94a3b8',
+                  color: '#cbd5e1',
                   fontFamily: 'Outfit',
+                  paddingRight: 4,
                 }}
               >
                 {loading ? (
@@ -555,22 +709,46 @@ export default function InferencePane() {
                     </span>
                   </div>
                 ) : responses[key] ? (
-                  <TypewriterText text={responses[key]} speed={key === 'champion' ? 18 : 22} />
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
+                    {responses[key]}
+                  </ReactMarkdown>
                 ) : null}
               </div>
-              {!loading && meta[key]?.latency_ms != null && (
+              {!loading && m?.latency_ms != null && (
                 <div
                   style={{
                     marginTop: 12,
+                    paddingTop: 10,
+                    borderTop: '1px solid #1e293b',
                     fontSize: 11,
                     fontFamily: 'JetBrains Mono',
-                    color: '#475569',
+                    color: '#64748b',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 12,
                   }}
                 >
-                  {meta[key]?.latency_ms != null && (
-                    <span style={{ marginRight: 12 }}>{Math.round(meta[key].latency_ms)} ms</span>
+                  {m?.model && <span style={{ color: color }}>{m.model}</span>}
+                  <span>·</span>
+                  <span>{Math.round(m.latency_ms).toLocaleString()} ms</span>
+                  {m?.tokens != null && (
+                    <>
+                      <span>·</span>
+                      <span>{m.tokens.toLocaleString()} tokens</span>
+                    </>
                   )}
-                  {meta[key]?.tokens != null && <span>{meta[key].tokens} tokens</span>}
+                  {tokensPerSec != null && (
+                    <>
+                      <span>·</span>
+                      <span style={{ color: '#76b900' }}>{tokensPerSec} tok/s</span>
+                    </>
+                  )}
+                  {m?.source && (
+                    <>
+                      <span>·</span>
+                      <span>{m.source}</span>
+                    </>
+                  )}
                 </div>
               )}
               {!loading && responses[key] && datasets.length > 0 && (
@@ -614,7 +792,8 @@ export default function InferencePane() {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

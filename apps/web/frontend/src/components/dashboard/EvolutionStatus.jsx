@@ -14,6 +14,7 @@ import { C, F } from '../../config/colors';
 import {
   apiFetch,
   fetchPresets,
+  getPreset,
   wsConnect,
   startEvolutionWithPreset,
 } from '../../config/api';
@@ -95,6 +96,10 @@ export default function EvolutionStatus() {
     elapsed_seconds: null,
   });
   const [presets, setPresets] = useState([]);
+  /** Cached preset config bodies, keyed by preset name. Populated lazily so we
+   * can show "Estimated time" and a one-line description without an extra
+   * round-trip on every selection change. */
+  const [presetDetails, setPresetDetails] = useState({});
   const [modalOpen, setModalOpen] = useState(false);
   const [tab, setTab] = useState('preset');
   const [selectedPreset, setSelectedPreset] = useState('standard');
@@ -306,6 +311,25 @@ export default function EvolutionStatus() {
       ollamaModels.includes(c.base_model) ? c : { ...c, base_model: ollamaModels[0] }
     );
   }, [modalOpen, tab, ollamaModels]);
+
+  // Lazy-fetch the selected preset's full config so the dialog can display
+  // a 1-line description + estimated duration before the user commits.
+  useEffect(() => {
+    if (!modalOpen || tab !== 'preset' || !selectedPreset) return;
+    if (presetDetails[selectedPreset]) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const p = await getPreset(selectedPreset);
+        if (!cancelled && p?.config) {
+          setPresetDetails((prev) => ({ ...prev, [selectedPreset]: p }));
+        }
+      } catch {
+        /* ignore — fallback rendering handles the missing case */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [modalOpen, tab, selectedPreset, presetDetails]);
 
   const idleNoRun =
     !isRunning &&
@@ -1041,6 +1065,76 @@ export default function EvolutionStatus() {
                     ))}
                   </select>
                 </label>
+
+                {(() => {
+                  const detail = presetDetails[selectedPreset];
+                  const cfg = detail?.config || {};
+                  // Rough ETA per generation. Empirically: TinyLlama ~12 min,
+                  // 3B Llama ~25 min, 8B Llama ~75 min for ~3000 samples.
+                  // Adjust by max_samples / 3000.
+                  const sizeMin = (() => {
+                    const bm = String(cfg.base_model || '').toLowerCase();
+                    if (bm.includes('tinyllama') || bm.includes('1b')) return 12;
+                    if (bm.includes('3b')) return 25;
+                    if (bm.includes('8b')) return 75;
+                    if (bm.includes('70b')) return 600;
+                    return 30;
+                  })();
+                  const samples = Number(cfg.max_samples) || 3000;
+                  const perGen = Math.round(sizeMin * (samples / 3000));
+                  const totalMin = perGen * Number(cfg.max_generations || 1);
+                  const fmtEta = (m) => {
+                    if (m < 60) return `~${m} min`;
+                    const h = Math.floor(m / 60);
+                    const r = m % 60;
+                    return r ? `~${h}h ${r}m` : `~${h}h`;
+                  };
+
+                  // Static one-line descriptions for the built-in presets.
+                  const blurb = {
+                    'quick-test': 'Smoke test — 1-2 generations, small samples, fast feedback.',
+                    'standard': 'Default loop — 10 generations on full benchmarks.',
+                    'deep-evolution': 'Long run — many generations, broad benchmarks (≈half a day).',
+                    'reasoning-specialist': 'Targets reasoning benchmarks (mmlu, arc, gsm8k).',
+                    'code-specialist': 'Targets code benchmarks (humaneval).',
+                  }[selectedPreset];
+
+                  return (
+                    <div
+                      style={{
+                        padding: '10px 12px',
+                        background: 'rgba(118,185,0,0.06)',
+                        border: `1px solid rgba(118,185,0,0.20)`,
+                        borderRadius: 8,
+                        fontFamily: F.ui,
+                        fontSize: 12,
+                        color: C.txtS,
+                        lineHeight: 1.55,
+                      }}
+                    >
+                      {blurb ? (
+                        <div style={{ color: C.txtP, marginBottom: detail ? 6 : 0 }}>{blurb}</div>
+                      ) : null}
+                      {detail ? (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontFamily: F.mono, color: C.txtM, fontSize: 11 }}>
+                          <span>base: <span style={{ color: C.acc }}>{cfg.base_model || '—'}</span></span>
+                          <span>·</span>
+                          <span>{cfg.max_generations ?? '?'} gen</span>
+                          <span>·</span>
+                          <span>{(cfg.max_samples ?? '?').toLocaleString?.() ?? cfg.max_samples ?? '?'} samples</span>
+                          <span>·</span>
+                          <span>LoRA r={cfg.lora_rank ?? '?'}</span>
+                          <span>·</span>
+                          <span style={{ color: C.acc }}>est. {fmtEta(totalMin)}</span>
+                        </div>
+                      ) : (
+                        <div style={{ fontFamily: F.mono, fontSize: 11, color: C.txtM }}>
+                          loading preset…
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
                 <label style={{ display: 'block' }}>
                   <span style={{ fontSize: 11, color: C.txtM, fontFamily: F.ui }}>
                     Base Ollama model (optional)

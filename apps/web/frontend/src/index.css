@@ -81,6 +81,7 @@ body {
 @keyframes sparkline-draw { from{stroke-dashoffset:200}to{stroke-dashoffset:0} }
 @keyframes edge-flow { 0%{stroke-dashoffset:20}100%{stroke-dashoffset:0} }
 @keyframes mf-bar-stripes { 0%{background-position:0 0}100%{background-position:32px 0} }
+@keyframes mf-topbar-pulse { 0%{transform:scale(1);opacity:.7}70%{transform:scale(2.2);opacity:0}100%{transform:scale(2.2);opacity:0} }
 @keyframes slide-in-right { 0%{transform:translateX(40px);opacity:0}100%{transform:translateX(0);opacity:1} }
 @keyframes ripple-out { 0%{transform:scale(0);opacity:.6}100%{transform:scale(4);opacity:0} }
 @keyframes float-badge { 0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)} }

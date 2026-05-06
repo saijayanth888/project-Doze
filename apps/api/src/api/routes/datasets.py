@@ -38,6 +38,25 @@ def _norm_hash(instr: str, resp: str) -> str:
     return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
 
+def _count_arrow_rows(arrow_path: Path) -> int:
+    """Count rows in a HuggingFace `Dataset.save_to_disk()` shard.
+
+    The curator writes via `Dataset.save_to_disk()` which produces an Arrow IPC
+    file but stores no `num_samples` field in `dataset_info.json`. Counting via
+    pyarrow is fast (<1ms for our shard sizes) and avoids loading column data.
+    """
+    try:
+        import pyarrow as pa  # bundled with `datasets`
+        with pa.memory_map(str(arrow_path), "r") as src:
+            reader = pa.ipc.open_stream(src)
+            total = 0
+            for batch in reader:
+                total += batch.num_rows
+            return total
+    except Exception:
+        return 0
+
+
 def _scan_curated(data_root: Path) -> list[DatasetSummary]:
     out: list[DatasetSummary] = []
     curated = data_root / "curated"
@@ -63,6 +82,12 @@ def _scan_curated(data_root: Path) -> list[DatasetSummary]:
                 sources = list(meta.get("sources") or [])
             except Exception:
                 pass
+        # `dataset_info.json` from `Dataset.save_to_disk()` doesn't include row
+        # counts; fall back to actually counting rows in the arrow shard so the
+        # UI doesn't show "0 samples" for a populated dataset.
+        if n_samples == 0:
+            for shard in sorted(p.glob("data-*.arrow")):
+                n_samples += _count_arrow_rows(shard)
         ts = datetime.fromtimestamp(p.stat().st_mtime, tz=UTC)
         out.append(
             DatasetSummary(
