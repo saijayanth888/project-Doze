@@ -71,14 +71,21 @@ export default function InferencePane() {
       if (raw) {
         const saved = JSON.parse(raw);
         if (typeof saved.prompt === 'string') setPrompt(saved.prompt);
-        if (saved.responses && typeof saved.responses === 'object') {
-          setResponses({
-            base: String(saved.responses.base ?? ''),
-            champion: String(saved.responses.champion ?? ''),
-          });
+        // Only restore *successful* response state. Persisting "Request failed…"
+        // strings would otherwise lock the pane in a perpetual error state on
+        // every page reload, even after the underlying problem is resolved.
+        const baseText = String(saved?.responses?.base ?? '');
+        const champText = String(saved?.responses?.champion ?? '');
+        const looksFailed =
+          baseText.startsWith('Request failed') ||
+          champText.startsWith('Request failed') ||
+          baseText.startsWith('No response returned') ||
+          champText.startsWith('No response returned');
+        if (saved.responses && typeof saved.responses === 'object' && !looksFailed) {
+          setResponses({ base: baseText, champion: champText });
+          if (saved.meta && typeof saved.meta === 'object') setMeta(saved.meta);
+          if (typeof saved.submitted === 'boolean') setSubmitted(saved.submitted);
         }
-        if (saved.meta && typeof saved.meta === 'object') setMeta(saved.meta);
-        if (typeof saved.submitted === 'boolean') setSubmitted(saved.submitted);
         if (typeof saved.adapterId === 'string') setAdapterId(saved.adapterId);
       }
     } catch {
@@ -90,10 +97,17 @@ export default function InferencePane() {
   useEffect(() => {
     if (!hydrated) return;
     try {
-      sessionStorage.setItem(
-        INFERENCE_STORAGE_KEY,
-        JSON.stringify({ prompt, responses, meta, submitted, adapterId })
-      );
+      // Don't persist failed responses — they outlive the problem and confuse
+      // the user on the next visit. Only persist real model output.
+      const failed =
+        String(responses.base ?? '').startsWith('Request failed') ||
+        String(responses.champion ?? '').startsWith('Request failed') ||
+        String(responses.base ?? '').startsWith('No response returned') ||
+        String(responses.champion ?? '').startsWith('No response returned');
+      const persistable = failed
+        ? { prompt, responses: { base: '', champion: '' }, meta: { base: null, champion: null }, submitted: false, adapterId }
+        : { prompt, responses, meta, submitted, adapterId };
+      sessionStorage.setItem(INFERENCE_STORAGE_KEY, JSON.stringify(persistable));
     } catch {
       /* ignore */
     }
