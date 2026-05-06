@@ -81,6 +81,17 @@ test.describe("Dashboard UI interactions", () => {
     await expect(page).toHaveURL(/\/dashboard/, { timeout: 15_000 });
   });
 
+  test("sidebar Start Evolution opens dashboard start modal", async ({ page }) => {
+    await page.goto("/settings", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: /^Start Evolution$/i }).click();
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 15_000 });
+    const dialog = page.locator('[role="dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+    await expect(dialog.getByText(/Start evolution/i).first()).toBeVisible();
+    await dialog.getByRole("button", { name: /^Cancel$/i }).click();
+    await expect(dialog).toBeHidden({ timeout: 10_000 });
+  });
+
   test("View Logs scrolls to activity feed section", async ({ page }) => {
     await page.goto("/dashboard");
     const logsBtn = page.getByRole("button", { name: /View Logs/i }).first();

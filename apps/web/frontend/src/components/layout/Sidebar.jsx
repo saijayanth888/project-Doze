@@ -119,11 +119,22 @@ export default function Sidebar({ collapsed, onToggle, champion }) {
 
       <div style={{ padding: collapsed ? '10px 0' : '12px', borderTop: `1px solid ${C.border}`, display: 'flex', justifyContent: collapsed ? 'center' : 'stretch' }}>
         {collapsed ? (
-          <button type="button" className="mf-cta-primary" onClick={() => navigate('/dashboard')} aria-label="Start Evolution" style={{ width: 36, height: 36, background: C.acc, border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 0 16px ${C.accGlow}`, color: '#000' }}>
+          <button
+            type="button"
+            className="mf-cta-primary"
+            onClick={() => navigate('/dashboard?startEvolution=1')}
+            aria-label="Start Evolution"
+            style={{ width: 36, height: 36, background: C.acc, border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 0 16px ${C.accGlow}`, color: '#000' }}
+          >
             <Play size={14} fill="currentColor" />
           </button>
         ) : (
-          <button type="button" className="mf-cta-primary" onClick={() => navigate('/dashboard')} style={{ width: '100%', padding: '10px', background: C.acc, color: '#000', border: 'none', borderRadius: 6, cursor: 'pointer', fontFamily: F.ui, fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, boxShadow: `0 0 20px ${C.accGlow}` }}>
+          <button
+            type="button"
+            className="mf-cta-primary"
+            onClick={() => navigate('/dashboard?startEvolution=1')}
+            style={{ width: '100%', padding: '10px', background: C.acc, color: '#000', border: 'none', borderRadius: 6, cursor: 'pointer', fontFamily: F.ui, fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, boxShadow: `0 0 20px ${C.accGlow}` }}
+          >
             <Play size={14} />
             Start Evolution
           </button>

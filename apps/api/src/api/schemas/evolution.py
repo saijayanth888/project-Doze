@@ -1,10 +1,14 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EvolutionRequest(BaseModel):
+    """POST body for `/api/evolve/start`. Presets may include extra keys — ignore them."""
+
+    model_config = ConfigDict(extra="ignore")
+
     base_model: str = Field(default="llama3.2:3b", description="Base Ollama model tag")
     existing_adapter: str | None = Field(default=None, description="Path to existing LoRA adapter")
     max_generations: int = Field(default=10, ge=1, le=100)

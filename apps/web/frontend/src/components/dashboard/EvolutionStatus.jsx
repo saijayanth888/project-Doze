@@ -71,6 +71,7 @@ export default function EvolutionStatus() {
   });
   const [metrics, setMetrics] = useState([]);
   const [tokensPerSec, setTokensPerSec] = useState(null);
+  const [startError, setStartError] = useState(null);
   const wsRef = useRef(null);
 
   const fetchStatus = useCallback(async () => {
@@ -103,6 +104,8 @@ export default function EvolutionStatus() {
           const names = p.presets.map((x) => x.name);
           if (names.includes('standard')) setSelectedPreset('standard');
           else setSelectedPreset(p.presets[0].name);
+        } else if (!cancelled) {
+          setTab('custom');
         }
       } catch {
         /* ignore */
@@ -114,14 +117,33 @@ export default function EvolutionStatus() {
   }, []);
 
   const presetFromUrl = searchParams.get('preset');
+  const startEvolutionFromUrl = searchParams.get('startEvolution');
+
+  /** Deep-link from sidebar (`?startEvolution=1`) or preset promotion (`?preset=name`). */
   useEffect(() => {
+    const openEvolution =
+      startEvolutionFromUrl === '1' || startEvolutionFromUrl === 'true';
+    if (!presetFromUrl && !openEvolution) return;
+
     if (presetFromUrl) {
       setSelectedPreset(presetFromUrl);
       setTab('preset');
       setModalOpen(true);
-      setSearchParams({}, { replace: true });
     }
-  }, [presetFromUrl, setSearchParams]);
+    if (openEvolution) {
+      setModalOpen(true);
+    }
+
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (presetFromUrl) next.delete('preset');
+        if (openEvolution) next.delete('startEvolution');
+        return next;
+      },
+      { replace: true }
+    );
+  }, [presetFromUrl, startEvolutionFromUrl, setSearchParams]);
 
   const isRunning = status.is_running === true || status.status === 'running';
 
@@ -180,8 +202,13 @@ export default function EvolutionStatus() {
   const stepIndex = apiStepToIndex(status.current_step);
 
   const handleStartFromModal = async () => {
+    setStartError(null);
     try {
       if (tab === 'preset') {
+        if (!presets.length) {
+          setStartError('No presets available — use Custom or check API / database.');
+          return;
+        }
         await startEvolutionWithPreset(selectedPreset);
       } else {
         const body = { ...customCfg };
@@ -195,8 +222,15 @@ export default function EvolutionStatus() {
       setModalOpen(false);
       setMetrics([]);
       fetchStatus();
-    } catch {
-      /* ignore */
+    } catch (e) {
+      const detail = e?.body?.detail;
+      const msg =
+        typeof detail === 'string'
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((x) => x.msg || JSON.stringify(x)).join('; ')
+            : e?.message || 'Request failed';
+      setStartError(msg);
     }
   };
 
@@ -238,12 +272,14 @@ export default function EvolutionStatus() {
     >
       {isRunning && (
         <div
+          aria-hidden
           style={{
             position: 'absolute',
             inset: 0,
             borderRadius: 8,
             zIndex: 0,
             padding: 1,
+            pointerEvents: 'none',
             background:
               'conic-gradient(from var(--evolution-angle),#818cf8,#c084fc,#f472b6,#818cf8)',
             animation: 'evolution-spin 3s linear infinite',
@@ -259,7 +295,7 @@ export default function EvolutionStatus() {
           />
         </div>
       )}
-      <div style={{ position: 'relative', zIndex: 1 }}>
+      <div style={{ position: 'relative', zIndex: 1, pointerEvents: 'auto' }}>
         <div
           style={{
             display: 'flex',
@@ -536,7 +572,10 @@ export default function EvolutionStatus() {
             <button
               type="button"
               className="mf-cta-primary"
-              onClick={() => setModalOpen(true)}
+              onClick={() => {
+                setStartError(null);
+                setModalOpen(true);
+              }}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -593,7 +632,10 @@ export default function EvolutionStatus() {
               padding: 16,
             }}
             role="presentation"
-            onClick={() => setModalOpen(false)}
+            onClick={() => {
+              setStartError(null);
+              setModalOpen(false);
+            }}
           >
             <div
               role="dialog"
@@ -613,6 +655,24 @@ export default function EvolutionStatus() {
             <div style={{ fontFamily: F.ui, fontWeight: 700, color: C.txtP, marginBottom: 12 }}>
               Start evolution
             </div>
+            {startError ? (
+              <div
+                role="alert"
+                style={{
+                  marginBottom: 12,
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  background: 'rgba(239,68,68,0.12)',
+                  border: '1px solid rgba(239,68,68,0.35)',
+                  color: C.danger,
+                  fontFamily: F.ui,
+                  fontSize: 12,
+                  lineHeight: 1.45,
+                }}
+              >
+                {startError}
+              </div>
+            ) : null}
             <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
               {['preset', 'custom'].map((t) => (
                 <button
@@ -711,10 +771,13 @@ export default function EvolutionStatus() {
               </div>
             )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
-              <button
-                type="button"
-                onClick={() => setModalOpen(false)}
-                style={{
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStartError(null);
+                    setModalOpen(false);
+                  }}
+                  style={{
                   padding: '8px 14px',
                   background: 'transparent',
                   border: `1px solid ${C.border}`,
