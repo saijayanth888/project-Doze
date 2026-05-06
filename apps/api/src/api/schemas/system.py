@@ -24,6 +24,11 @@ class GPUStatus(BaseModel):
     note: str | None = None
     inference_note: str | None = None
     ollama_inference_ok: bool = False
+    # DGX Spark / Jetson unified-memory enrichment
+    unified_memory: bool | None = None
+    unified_total_gb: float | None = None
+    unified_used_gb: float | None = None
+    unified_note: str | None = None
 
 
 class EnvironmentInfo(BaseModel):

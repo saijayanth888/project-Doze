@@ -30,6 +30,17 @@ export default function GPUMonitor() {
   const vramTotalN = gpu.vram_total_gb != null ? Number(gpu.vram_total_gb) : null;
   const unifiedMemory = vramTotalN == null && vramUsedN == null;
 
+  // DGX Spark unified memory: API enriches the payload with system-RAM totals
+  // so we can show a real value instead of just "Unified Memory".
+  const unifiedTotalN = gpu.unified_total_gb != null ? Number(gpu.unified_total_gb) : null;
+  const unifiedUsedN = gpu.unified_used_gb != null ? Number(gpu.unified_used_gb) : null;
+  const unifiedTotal = unifiedTotalN != null && Number.isFinite(unifiedTotalN) ? unifiedTotalN.toFixed(0) : null;
+  const unifiedUsed = unifiedUsedN != null && Number.isFinite(unifiedUsedN) ? unifiedUsedN.toFixed(1) : null;
+  const unifiedBarPct =
+    unifiedTotalN != null && unifiedTotalN > 0 && unifiedUsedN != null && Number.isFinite(unifiedUsedN)
+      ? (unifiedUsedN / unifiedTotalN) * 100
+      : null;
+
   const vramUsed = vramUsedN != null && Number.isFinite(vramUsedN) ? vramUsedN.toFixed(1) : '—';
   const vramTotal = vramTotalN != null && Number.isFinite(vramTotalN) ? vramTotalN.toFixed(0) : '—';
 
@@ -105,10 +116,30 @@ export default function GPUMonitor() {
         live
       />
       <KPICard
-        label="VRAM"
-        value={unifiedMemory ? 'Unified Memory' : `${vramUsed}GB`}
-        sub={unifiedMemory ? null : `of ${vramTotal}GB total`}
-        bar={!unifiedMemory && vramBarPct != null ? { pct: vramBarPct, color: C.ind } : null}
+        label={unifiedMemory ? 'Unified Memory' : 'VRAM'}
+        value={
+          unifiedMemory
+            ? unifiedUsed != null
+              ? `${unifiedUsed}GB`
+              : 'Unified'
+            : `${vramUsed}GB`
+        }
+        sub={
+          unifiedMemory
+            ? unifiedTotal != null
+              ? `of ${unifiedTotal}GB system RAM (CPU+GPU share one pool)`
+              : 'CPU + GPU share one pool of memory'
+            : `of ${vramTotal}GB total`
+        }
+        bar={
+          unifiedMemory
+            ? unifiedBarPct != null
+              ? { pct: unifiedBarPct, color: C.ind }
+              : null
+            : vramBarPct != null
+              ? { pct: vramBarPct, color: C.ind }
+              : null
+        }
       />
       <KPICard
         label="Temperature"

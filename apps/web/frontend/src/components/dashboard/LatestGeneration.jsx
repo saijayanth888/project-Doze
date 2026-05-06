@@ -154,8 +154,64 @@ export default function LatestGeneration() {
         })}
       </div>
 
-      <div style={{ fontFamily: F.mono, fontSize: 10, color: C.txtM }}>
-        {gen.training_data_size?.toLocaleString?.() ?? '—'} samples · {gen.decision_reason ?? '—'}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div style={{ fontFamily: F.mono, fontSize: 10, color: C.txtM, lineHeight: 1.5 }}>
+          {gen.training_data_size?.toLocaleString?.() ?? '—'} samples · {gen.decision_reason ?? '—'}
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            // Per-benchmark report: machine-readable JSON the user can hand to a
+            // teammate or paste into a ticket. Includes parent vs child scores,
+            // the delta, weights, and the orchestrator decision_reason.
+            const report = {
+              run_id: gen.run_id ?? null,
+              generation: gen.generation ?? null,
+              promoted: !!gen.promoted,
+              decision_reason: gen.decision_reason ?? null,
+              method: gen.method ?? null,
+              training_data_size: gen.training_data_size ?? null,
+              duration_seconds: gen.duration_seconds ?? null,
+              parent_scores: parentScores,
+              child_scores: childScores,
+              parent_avg: Number(parentAvg.toFixed(4)),
+              child_avg: Number(childAvg.toFixed(4)),
+              delta: Number(delta.toFixed(4)),
+              per_benchmark: Object.keys(childScores).map((bm) => ({
+                benchmark: bm,
+                parent: parentScores[bm] ?? null,
+                child: childScores[bm] ?? null,
+                delta: (childScores[bm] ?? 0) - (parentScores[bm] ?? 0),
+              })),
+              created_at: gen.created_at ?? new Date().toISOString(),
+            };
+            const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const safeRun = String(gen.run_id || 'gen').replace(/[^a-zA-Z0-9._-]/g, '_');
+            a.href = url;
+            a.download = `${safeRun}-gen${gen.generation ?? 0}-report.json`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 0);
+          }}
+          title="Download a JSON report of this generation's benchmark scores."
+          style={{
+            flexShrink: 0,
+            padding: '4px 10px',
+            background: 'transparent',
+            color: C.txtS,
+            border: `1px solid ${C.border}`,
+            borderRadius: 4,
+            cursor: 'pointer',
+            fontFamily: F.ui,
+            fontSize: 11,
+            fontWeight: 500,
+          }}
+        >
+          ⬇ Download report
+        </button>
       </div>
     </div>
   );

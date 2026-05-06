@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from agents.eval_backend import (
@@ -32,6 +33,7 @@ from services.data_curator import (
     MockDataCurator,
 )
 from services.lineage_db import LineageDB
+from services.model_registry import ModelRegistry
 from services.n8n_webhook import (
     build_evolution_payload,
     emit_evolution_complete,
@@ -146,6 +148,40 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     score=float(score),
                     promoted=s.get("decision") == "promote",
                 )
+
+            # Sync the file-based registry so /api/models/champion (read by the
+            # dashboard Champion card) reflects the new winner. Without this the
+            # dashboard sticks on the previous champion forever even after a
+            # successful promotion lands in Postgres.
+            if s.get("decision") == "promote":
+                try:
+                    raw_base = str((config or {}).get("base_model") or "").strip()
+                    try:
+                        from utils.hf_model_id import resolve_hf_base_model_id
+                        base_model_resolved = resolve_hf_base_model_id(raw_base or None)
+                    except Exception:
+                        base_model_resolved = raw_base or "unknown"
+                    scores = {k: float(v) for k, v in s.get("child_scores", {}).items()}
+                    avg = sum(scores.values()) / len(scores) if scores else 0.0
+                    info = {
+                        "name": f"mf-{run_id}-g{s['generation']}",
+                        "base_model": base_model_resolved,
+                        "generation": int(s["generation"]),
+                        "adapter_path": s.get("adapter_path"),
+                        "adapter_id": f"{run_id}__gen{s['generation']}",
+                        "scores": scores,
+                        "avg_score": round(avg, 4),
+                        "method": s.get("method"),
+                        "ollama_model": None,
+                        "promoted_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    ModelRegistry().set_champion(info)
+                    logger.info(
+                        "[evolution %s] champion updated in registry: gen=%d avg=%.4f",
+                        run_id, s["generation"], info["avg_score"],
+                    )
+                except Exception as exc:
+                    logger.warning("[evolution %s] failed to update champion registry: %s", run_id, exc)
 
             evt = "champion_promoted" if s.get("decision") == "promote" else "generation_complete"
             base_model = str((config or {}).get("base_model") or "unknown")

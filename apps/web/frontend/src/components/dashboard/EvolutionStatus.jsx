@@ -917,14 +917,8 @@ export default function EvolutionStatus() {
           )}
           <button
             type="button"
-            title="Opens the Activity panel below (DB-backed events). For raw API logs use docker compose logs api."
-            onClick={() => {
-              scrollToDashboardActivity();
-              toast(
-                'Activity shows DB-backed evolution events below. For raw API logs: docker compose logs api',
-                'info'
-              );
-            }}
+            title="Scroll to the Activity panel — DB-backed evolution events. (raw API logs: docker compose logs api)"
+            onClick={() => scrollToDashboardActivity()}
             style={{
               padding: '5px 12px',
               background: 'transparent',

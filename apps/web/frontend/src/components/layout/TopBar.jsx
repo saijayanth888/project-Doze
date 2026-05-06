@@ -166,8 +166,20 @@ export default function TopBar({ champion = null }) {
               <path d="M2 20h20"/><rect x="4" y="4" width="16" height="12" rx="1"/>
               <path d="M8 4v12"/><path d="M16 4v12"/>
             </svg>
-            <span style={{ fontFamily: F.mono, fontSize: 11, color: C.txtS }}>
-              {vramUnified ? 'Unified Memory' : `${vramUsedDisp}/${vramTotalDisp}GB`}
+            <span
+              title={
+                vramUnified
+                  ? gpuUtil?.unified_note
+                    || 'NVIDIA GB10 / DGX Spark uses unified memory (CPU+GPU share system RAM).'
+                  : undefined
+              }
+              style={{ fontFamily: F.mono, fontSize: 11, color: C.txtS, cursor: vramUnified ? 'help' : 'default' }}
+            >
+              {vramUnified
+                ? gpuUtil?.unified_used_gb != null && gpuUtil?.unified_total_gb != null
+                  ? `${Number(gpuUtil.unified_used_gb).toFixed(1)}/${Number(gpuUtil.unified_total_gb).toFixed(0)}GB shared`
+                  : 'Unified Memory'
+                : `${vramUsedDisp}/${vramTotalDisp}GB`}
             </span>
           </div>
         )}

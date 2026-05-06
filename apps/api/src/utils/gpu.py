@@ -20,6 +20,44 @@ _SPARK_INFERENCE_NOTE = (
     "container does not report NVIDIA metrics."
 )
 
+_UNIFIED_MEMORY_NOTE = (
+    "DGX Spark (NVIDIA GB10) shares one pool of memory between CPU and GPU "
+    "(NVLink-C2C unified memory), so `nvidia-smi --query-gpu=memory.total` returns "
+    "[N/A]. The dashboard reports system RAM instead."
+)
+
+
+def _read_unified_memory() -> dict | None:
+    """On DGX Spark / Jetson-style unified memory, fall back to /proc/meminfo so the
+    user still sees a real "memory used / total" number instead of a useless dash."""
+    try:
+        info: dict[str, int] = {}
+        with open("/proc/meminfo", encoding="utf-8") as fh:
+            for line in fh:
+                key, _, rest = line.partition(":")
+                rest = rest.strip()
+                if not rest:
+                    continue
+                num = rest.split()[0]
+                try:
+                    info[key.strip()] = int(num)
+                except ValueError:
+                    continue
+        total_kb = info.get("MemTotal")
+        avail_kb = info.get("MemAvailable", info.get("MemFree"))
+        if not total_kb or avail_kb is None:
+            return None
+        used_kb = max(0, total_kb - avail_kb)
+        return {
+            "unified_memory": True,
+            "unified_total_gb": round(total_kb / 1024 / 1024, 2),
+            "unified_used_gb": round(used_kb / 1024 / 1024, 2),
+            "unified_note": _UNIFIED_MEMORY_NOTE,
+        }
+    except Exception as exc:
+        logger.debug("[gpu] /proc/meminfo unavailable: %s", exc)
+        return None
+
 
 def _fallback_no_smi(note: str | None = None) -> dict:
     if note is None:
@@ -133,10 +171,20 @@ def get_gpu_status() -> dict:
     """Return GPU telemetry when available; otherwise an honest CPU / no-metrics fallback."""
     smi = _from_nvidia_smi()
     if smi is not None:
+        # When the GPU reports unified memory ([N/A] for memory.total — DGX Spark
+        # GB10 / Jetson), enrich the payload with system-RAM usage so the UI can
+        # show a real "X / Y GB" instead of a useless dash.
+        if smi.get("vram_total_gb") is None and smi.get("vram_used_gb") is None:
+            mem = _read_unified_memory()
+            if mem:
+                smi.update(mem)
         return smi
 
     torch_gpu = _from_torch_cuda()
     if torch_gpu is not None:
+        mem = _read_unified_memory()
+        if mem:
+            torch_gpu.update(mem)
         return torch_gpu
 
     logger.warning("get_gpu_status: no NVIDIA metrics, using fallback")
