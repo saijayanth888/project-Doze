@@ -51,6 +51,19 @@ async def _notify_automation(message: str, emoji: str, *, event_type: str | None
             await eng.notify(message, emoji, event_type=event_type)
     except Exception:
         pass
+
+
+def _emit_event(topic: str, payload: dict | None = None) -> None:
+    """Publish a domain event for event-triggered workflows.
+
+    Best-effort + sync-callable: never raises, never blocks. Workflows whose
+    trigger pattern matches will fire in parallel via the bus.
+    """
+    try:
+        from services.event_bus import bus
+        bus.publish_nowait(topic, payload or {})
+    except Exception:
+        pass
 from services.n8n_webhook import (
     build_evolution_payload,
     emit_evolution_complete,
@@ -116,6 +129,12 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
         "🚀",
         event_type="evolution_started",
     )
+    _emit_event("evolution.started", {
+        "run_id": run_id,
+        "base_model": config.get("base_model"),
+        "max_generations": config.get("max_generations"),
+        "config": config,
+    })
 
     state: EvolutionState = {
         "run_id": run_id,
@@ -267,6 +286,21 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                 "🏆" if promoted else "❌",
                 event_type="champion_promoted" if promoted else "generation_complete",
             )
+            # Domain events for workflow triggers.
+            event_payload = {
+                "run_id": run_id,
+                "generation": int(s["generation"]),
+                "child_scores": dict(s.get("child_scores") or {}),
+                "child_avg": round(avg, 4),
+                "decision": s.get("decision"),
+                "decision_reason": s.get("decision_reason"),
+                "promoted": bool(promoted),
+            }
+            _emit_event("generation.completed", event_payload)
+            if promoted:
+                _emit_event("champion.promoted", event_payload)
+            else:
+                _emit_event("generation.discarded", event_payload)
 
     graph = build_graph(
         training=training,
@@ -321,6 +355,13 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                 "✅",
                 event_type="evolution_complete",
             )
+            _emit_event("evolution.completed", {
+                "run_id": run_id,
+                "champion_avg": float(final.get("champion_avg", 0.0)),
+                "generations": int(final.get("generation", 0) or 0),
+                "child_scores": final.get("child_scores") or {},
+                "base_model": base_model,
+            })
         logger.info(
             "[evolution %s] finished — last gen %s, champion avg %.4f",
             run_id,
@@ -347,6 +388,12 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
             "🔴",
             event_type="evolution_failed",
         )
+        _emit_event("evolution.failed", {
+            "run_id": run_id,
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:500],
+            "generation": int(state.get("generation", 0)),
+        })
         await db.update_run_status(
             run_id,
             status="failed",

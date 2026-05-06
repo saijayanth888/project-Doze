@@ -611,6 +611,49 @@ class LineageDB:
             )
             """,
             "INSERT INTO automation_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
+            # ── Workflow engine (advanced automation) ────────────────────
+            # User-defined automations. trigger + condition + actions[].
+            # `kind` distinguishes seeded "system" workflows (the legacy 6
+            # default jobs, now expressed as workflows) from "user" workflows.
+            """
+            CREATE TABLE IF NOT EXISTS automation_workflows (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name TEXT NOT NULL,
+                description TEXT,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                kind TEXT NOT NULL DEFAULT 'user',
+                trigger_type TEXT NOT NULL,
+                trigger_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+                condition JSONB,
+                actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+                webhook_secret TEXT,
+                last_run_at TIMESTAMPTZ,
+                last_run_status TEXT,
+                last_run_message TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_workflows_kind_name ON automation_workflows (kind, name)",
+            "CREATE INDEX IF NOT EXISTS idx_automation_workflows_trigger ON automation_workflows (trigger_type) WHERE enabled",
+            # Per-execution trace.
+            """
+            CREATE TABLE IF NOT EXISTS automation_workflow_runs (
+                id BIGSERIAL PRIMARY KEY,
+                workflow_id UUID NOT NULL REFERENCES automation_workflows(id) ON DELETE CASCADE,
+                trigger_kind TEXT NOT NULL,
+                trigger_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                status TEXT NOT NULL DEFAULT 'running',
+                condition_passed BOOLEAN,
+                step_traces JSONB NOT NULL DEFAULT '[]'::jsonb,
+                error TEXT,
+                started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                finished_at TIMESTAMPTZ,
+                duration_ms INT
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_automation_workflow_runs_workflow ON automation_workflow_runs (workflow_id, started_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_automation_workflow_runs_recent ON automation_workflow_runs (started_at DESC)",
         ]
         async with self._pool.acquire() as conn:
             for stmt in ddl:
@@ -1021,6 +1064,242 @@ def _normalize_job_row(row: dict) -> dict:
     return out
 
 
+# ── Workflow engine DAOs ─────────────────────────────────────────
+def _normalize_workflow_row(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    out = dict(row)
+    out["trigger_config"] = _coerce_jsonb(out.get("trigger_config")) or {}
+    out["actions"] = _coerce_jsonb(out.get("actions")) or []
+    out["condition"] = _coerce_jsonb(out.get("condition"))
+    out["id"] = str(out["id"])  # UUID → str for JSON safety
+    return out
+
+
+def _normalize_workflow_run_row(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    out = dict(row)
+    out["trigger_payload"] = _coerce_jsonb(out.get("trigger_payload")) or {}
+    out["step_traces"] = _coerce_jsonb(out.get("step_traces")) or []
+    out["id"] = int(out["id"])
+    out["workflow_id"] = str(out["workflow_id"])
+    return out
+
+
+async def _list_workflows(self, *, kind: str | None = None) -> list[dict]:
+    if self._pool is None:
+        return []
+    sql = "SELECT * FROM automation_workflows"
+    args: list = []
+    if kind:
+        sql += " WHERE kind = $1"
+        args.append(kind)
+    sql += " ORDER BY kind ASC, name ASC"
+    async with self._pool.acquire() as conn:
+        rows = await conn.fetch(sql, *args)
+    return [_normalize_workflow_row(dict(r)) for r in rows]
+
+
+async def _get_workflow(self, workflow_id: str) -> dict | None:
+    if self._pool is None:
+        return None
+    async with self._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM automation_workflows WHERE id = $1::uuid",
+            workflow_id,
+        )
+    return _normalize_workflow_row(dict(row) if row else None)
+
+
+async def _get_workflow_by_name(self, kind: str, name: str) -> dict | None:
+    if self._pool is None:
+        return None
+    async with self._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM automation_workflows WHERE kind = $1 AND name = $2",
+            kind, name,
+        )
+    return _normalize_workflow_row(dict(row) if row else None)
+
+
+async def _create_workflow(
+    self,
+    *,
+    name: str,
+    description: str | None,
+    enabled: bool,
+    kind: str,
+    trigger_type: str,
+    trigger_config: dict,
+    condition: dict | None,
+    actions: list,
+    webhook_secret: str | None = None,
+) -> dict | None:
+    if self._pool is None:
+        return None
+    async with self._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO automation_workflows
+                (name, description, enabled, kind, trigger_type,
+                 trigger_config, condition, actions, webhook_secret)
+            VALUES ($1, $2, $3, $4, $5,
+                    $6::jsonb, $7::jsonb, $8::jsonb, $9)
+            RETURNING *
+            """,
+            name, description, bool(enabled), kind, trigger_type,
+            json.dumps(trigger_config or {}),
+            json.dumps(condition) if condition else None,
+            json.dumps(actions or []),
+            webhook_secret,
+        )
+    return _normalize_workflow_row(dict(row) if row else None)
+
+
+async def _update_workflow(self, workflow_id: str, payload: dict) -> dict | None:
+    if self._pool is None:
+        return None
+    sets, vals = [], []
+    for key in ("name", "description", "enabled", "trigger_type", "webhook_secret"):
+        if key in payload:
+            sets.append(f"{key} = ${len(vals) + 1}")
+            vals.append(payload[key])
+    for key in ("trigger_config", "condition", "actions"):
+        if key in payload:
+            sets.append(f"{key} = ${len(vals) + 1}::jsonb")
+            vals.append(json.dumps(payload[key]) if payload[key] is not None else None)
+    if not sets:
+        return await self.get_workflow(workflow_id)
+    sets.append("updated_at = NOW()")
+    sql = f"UPDATE automation_workflows SET {', '.join(sets)} WHERE id = ${len(vals) + 1}::uuid RETURNING *"
+    vals.append(workflow_id)
+    async with self._pool.acquire() as conn:
+        row = await conn.fetchrow(sql, *vals)
+    return _normalize_workflow_row(dict(row) if row else None)
+
+
+async def _record_workflow_run_summary(
+    self,
+    workflow_id: str,
+    *,
+    status: str,
+    message: str | None,
+) -> None:
+    """Mirror the run outcome onto the workflow row so the UI list can show it."""
+    if self._pool is None:
+        return
+    async with self._pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE automation_workflows
+               SET last_run_at = NOW(),
+                   last_run_status = $2,
+                   last_run_message = $3
+             WHERE id = $1::uuid
+            """,
+            workflow_id, status, (message or "")[:500],
+        )
+
+
+async def _delete_workflow(self, workflow_id: str) -> bool:
+    if self._pool is None:
+        return False
+    async with self._pool.acquire() as conn:
+        r = await conn.execute(
+            "DELETE FROM automation_workflows WHERE id = $1::uuid AND kind = 'user'",
+            workflow_id,
+        )
+    return r.startswith("DELETE") and not r.endswith(" 0")
+
+
+async def _start_workflow_run(
+    self,
+    *,
+    workflow_id: str,
+    trigger_kind: str,
+    trigger_payload: dict | None,
+) -> dict | None:
+    if self._pool is None:
+        return None
+    async with self._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO automation_workflow_runs
+                (workflow_id, trigger_kind, trigger_payload, status)
+            VALUES ($1::uuid, $2, $3::jsonb, 'running')
+            RETURNING *
+            """,
+            workflow_id, trigger_kind, json.dumps(trigger_payload or {}),
+        )
+    return _normalize_workflow_run_row(dict(row) if row else None)
+
+
+async def _finish_workflow_run(
+    self,
+    run_id: int,
+    *,
+    status: str,
+    condition_passed: bool | None,
+    step_traces: list,
+    error: str | None = None,
+    duration_ms: int | None = None,
+) -> None:
+    if self._pool is None:
+        return
+    async with self._pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE automation_workflow_runs
+               SET status = $2,
+                   condition_passed = $3,
+                   step_traces = $4::jsonb,
+                   error = $5,
+                   finished_at = NOW(),
+                   duration_ms = $6
+             WHERE id = $1
+            """,
+            int(run_id), status, condition_passed,
+            json.dumps(step_traces or []),
+            (error or None) and str(error)[:1000],
+            int(duration_ms) if duration_ms is not None else None,
+        )
+
+
+async def _list_workflow_runs(
+    self,
+    workflow_id: str | None = None,
+    *,
+    limit: int = 50,
+) -> list[dict]:
+    if self._pool is None:
+        return []
+    if workflow_id:
+        sql = (
+            "SELECT * FROM automation_workflow_runs "
+            "WHERE workflow_id = $1::uuid "
+            "ORDER BY started_at DESC LIMIT $2"
+        )
+        args = [workflow_id, int(limit)]
+    else:
+        sql = "SELECT * FROM automation_workflow_runs ORDER BY started_at DESC LIMIT $1"
+        args = [int(limit)]
+    async with self._pool.acquire() as conn:
+        rows = await conn.fetch(sql, *args)
+    return [_normalize_workflow_run_row(dict(r)) for r in rows]
+
+
+async def _get_workflow_run(self, run_id: int) -> dict | None:
+    if self._pool is None:
+        return None
+    async with self._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM automation_workflow_runs WHERE id = $1",
+            int(run_id),
+        )
+    return _normalize_workflow_run_row(dict(row) if row else None)
+
+
 # Bind the helpers as LineageDB methods so call sites read naturally.
 LineageDB.list_automation_jobs    = _list_automation_jobs
 LineageDB.get_automation_job      = _get_automation_job
@@ -1030,3 +1309,14 @@ LineageDB.list_automation_log     = _list_automation_log
 LineageDB.clear_automation_log    = _clear_automation_log
 LineageDB.get_automation_settings = _get_automation_settings
 LineageDB.update_automation_settings = _update_automation_settings
+LineageDB.list_workflows                = _list_workflows
+LineageDB.get_workflow                  = _get_workflow
+LineageDB.get_workflow_by_name          = _get_workflow_by_name
+LineageDB.create_workflow               = _create_workflow
+LineageDB.update_workflow               = _update_workflow
+LineageDB.delete_workflow               = _delete_workflow
+LineageDB.record_workflow_run_summary   = _record_workflow_run_summary
+LineageDB.start_workflow_run            = _start_workflow_run
+LineageDB.finish_workflow_run           = _finish_workflow_run
+LineageDB.list_workflow_runs            = _list_workflow_runs
+LineageDB.get_workflow_run              = _get_workflow_run
