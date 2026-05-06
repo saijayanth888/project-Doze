@@ -48,6 +48,18 @@ async def lifespan(app: FastAPI):
         logger.warning("DB init failed (mock mode): %s", exc)
         app.state.db_pool = None
 
+    # Phase-3/4 idempotent migrations + default track seeding. Both are best-
+    # effort — failures are logged but never block the API from booting.
+    if app.state.db_pool is not None:
+        try:
+            from services.lineage_db import LineageDB
+            db = LineageDB(app.state.db_pool)
+            await db.apply_phase34_migrations()
+            from services.track_seed import seed_default_tracks
+            await seed_default_tracks(db)
+        except Exception as exc:
+            logger.warning("phase3/4 migration/seed skipped: %s", exc)
+
     yield
 
     await close_redis()

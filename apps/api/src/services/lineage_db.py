@@ -505,3 +505,333 @@ class LineageDB:
                 exclude_dataset,
             )
             return int(n or 0)
+
+    # ── Phase-3/4 idempotent migrations ─────────────────────────────
+    async def apply_phase34_migrations(self) -> None:
+        """Idempotent CREATE statements for the new tables introduced by
+        Phase 3 (run history archived_at, schedule) and Phase 4 (tracks).
+
+        Safe to call on every API boot. Avoids needing to wipe the postgres
+        volume on existing installs.
+        """
+        if self._pool is None:
+            return
+        ddl = [
+            "ALTER TABLE evolution_runs ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ",
+            """
+            CREATE TABLE IF NOT EXISTS evolution_tracks (
+                track_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                base_model TEXT NOT NULL,
+                target_benchmarks JSONB NOT NULL DEFAULT '[]'::jsonb,
+                champion_adapter_path TEXT,
+                champion_run_id TEXT,
+                champion_generation INT NOT NULL DEFAULT 0,
+                champion_scores JSONB DEFAULT '{}'::jsonb,
+                lora_rank INT NOT NULL DEFAULT 16,
+                lora_alpha INT NOT NULL DEFAULT 32,
+                learning_rate DOUBLE PRECISION NOT NULL DEFAULT 0.0002,
+                max_samples INT NOT NULL DEFAULT 2000,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS track_generations (
+                id SERIAL PRIMARY KEY,
+                track_id TEXT NOT NULL REFERENCES evolution_tracks(track_id) ON DELETE CASCADE,
+                generation INT NOT NULL,
+                run_id TEXT,
+                scores JSONB NOT NULL DEFAULT '{}'::jsonb,
+                promoted BOOLEAN NOT NULL DEFAULT FALSE,
+                adapter_path TEXT,
+                training_duration_sec DOUBLE PRECISION,
+                eval_duration_sec DOUBLE PRECISION,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_track_gens_track ON track_generations (track_id, generation)",
+            """
+            CREATE TABLE IF NOT EXISTS evolution_schedule (
+                id INT PRIMARY KEY DEFAULT 1,
+                enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                cron TEXT NOT NULL DEFAULT '0 3 * * *',
+                config JSONB NOT NULL DEFAULT '{}'::jsonb,
+                last_run_id TEXT,
+                last_run_at TIMESTAMPTZ,
+                next_run_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CHECK (id = 1)
+            )
+            """,
+            "INSERT INTO evolution_schedule (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
+        ]
+        async with self._pool.acquire() as conn:
+            for stmt in ddl:
+                try:
+                    await conn.execute(stmt)
+                except Exception as exc:
+                    logger.warning("apply_phase34_migrations stmt failed: %s | %s", exc, stmt[:80])
+
+    # ── Phase-3: Run history ────────────────────────────────────────
+    async def list_runs(
+        self,
+        *,
+        include_archived: bool = False,
+        limit: int = 200,
+    ) -> list[dict]:
+        if self._pool is None:
+            return []
+        where = "" if include_archived else "WHERE archived_at IS NULL"
+        sql = f"""
+            SELECT
+                r.run_id,
+                r.status,
+                r.base_model,
+                r.config,
+                r.current_generation AS generations_completed,
+                r.current_step,
+                r.error,
+                r.started_at,
+                r.completed_at,
+                r.archived_at,
+                COALESCE(g.gen_count, 0)        AS gens_persisted,
+                g.last_promoted_avg              AS final_champion_score,
+                g.last_promoted_scores           AS final_scores
+            FROM evolution_runs r
+            LEFT JOIN (
+                SELECT
+                    run_id,
+                    COUNT(*) AS gen_count,
+                    (SELECT child_scores FROM generations g2
+                       WHERE g2.run_id = generations.run_id AND g2.promoted
+                       ORDER BY g2.generation DESC LIMIT 1) AS last_promoted_scores,
+                    (SELECT (CASE WHEN jsonb_typeof(child_scores) = 'object'
+                                  AND (SELECT count(*) FROM jsonb_object_keys(child_scores)) > 0
+                                  THEN (
+                                      SELECT avg((value)::text::double precision)
+                                      FROM jsonb_each(child_scores)
+                                  )
+                                  ELSE NULL END)
+                       FROM generations g3
+                       WHERE g3.run_id = generations.run_id AND g3.promoted
+                       ORDER BY g3.generation DESC LIMIT 1) AS last_promoted_avg
+                FROM generations
+                GROUP BY run_id
+            ) g ON g.run_id = r.run_id
+            {where}
+            ORDER BY r.started_at DESC NULLS LAST
+            LIMIT $1
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql, int(limit))
+        return [dict(r) for r in rows]
+
+    async def archive_run(self, run_id: str) -> bool:
+        if self._pool is None:
+            return False
+        async with self._pool.acquire() as conn:
+            r = await conn.execute(
+                "UPDATE evolution_runs SET archived_at = NOW() WHERE run_id = $1 AND archived_at IS NULL",
+                run_id,
+            )
+            # asyncpg returns "UPDATE <count>" string; treat any UPDATE as success.
+            return r.startswith("UPDATE") and not r.endswith(" 0")
+
+    # ── Phase-3: Schedule ───────────────────────────────────────────
+    async def get_schedule(self) -> dict | None:
+        if self._pool is None:
+            return None
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM evolution_schedule WHERE id = 1")
+        return dict(row) if row else None
+
+    async def update_schedule(
+        self,
+        *,
+        enabled: bool | None = None,
+        cron: str | None = None,
+        config: dict | None = None,
+        last_run_id: str | None = None,
+        next_run_at: Any | None = None,
+    ) -> dict | None:
+        if self._pool is None:
+            return None
+        sets = []
+        vals: list[Any] = []
+        if enabled is not None:
+            sets.append(f"enabled = ${len(vals) + 1}")
+            vals.append(bool(enabled))
+        if cron is not None:
+            sets.append(f"cron = ${len(vals) + 1}")
+            vals.append(str(cron))
+        if config is not None:
+            sets.append(f"config = ${len(vals) + 1}::jsonb")
+            vals.append(json.dumps(config))
+        if last_run_id is not None:
+            sets.append(f"last_run_id = ${len(vals) + 1}")
+            vals.append(str(last_run_id))
+            sets.append("last_run_at = NOW()")
+        if next_run_at is not None:
+            sets.append(f"next_run_at = ${len(vals) + 1}")
+            vals.append(next_run_at)
+        if not sets:
+            return await self.get_schedule()
+        sets.append("updated_at = NOW()")
+        sql = f"UPDATE evolution_schedule SET {', '.join(sets)} WHERE id = 1 RETURNING *"
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(sql, *vals)
+        return dict(row) if row else None
+
+    # ── Phase-4: Tracks ─────────────────────────────────────────────
+    async def list_tracks(self) -> list[dict]:
+        if self._pool is None:
+            return []
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM evolution_tracks ORDER BY created_at ASC")
+        return [_normalize_track_row(dict(r)) for r in rows]
+
+    async def get_track(self, track_id: str) -> dict | None:
+        if self._pool is None:
+            return None
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM evolution_tracks WHERE track_id = $1", track_id)
+        return _normalize_track_row(dict(row)) if row else None
+
+    async def upsert_track(self, payload: dict) -> dict | None:
+        if self._pool is None:
+            return None
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO evolution_tracks (
+                    track_id, name, description, base_model, target_benchmarks,
+                    lora_rank, lora_alpha, learning_rate, max_samples, enabled
+                )
+                VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10)
+                ON CONFLICT (track_id) DO UPDATE SET
+                    name              = EXCLUDED.name,
+                    description       = EXCLUDED.description,
+                    base_model        = EXCLUDED.base_model,
+                    target_benchmarks = EXCLUDED.target_benchmarks,
+                    lora_rank         = EXCLUDED.lora_rank,
+                    lora_alpha        = EXCLUDED.lora_alpha,
+                    learning_rate     = EXCLUDED.learning_rate,
+                    max_samples       = EXCLUDED.max_samples,
+                    enabled           = EXCLUDED.enabled,
+                    updated_at        = NOW()
+                RETURNING *
+                """,
+                str(payload["track_id"]),
+                str(payload.get("name") or payload["track_id"]),
+                payload.get("description"),
+                str(payload.get("base_model") or "llama3.2:3b"),
+                json.dumps(payload.get("target_benchmarks") or []),
+                int(payload.get("lora_rank") or 16),
+                int(payload.get("lora_alpha") or 32),
+                float(payload.get("learning_rate") or 2e-4),
+                int(payload.get("max_samples") or 2000),
+                bool(payload.get("enabled", True)),
+            )
+        return _normalize_track_row(dict(row)) if row else None
+
+    async def delete_track(self, track_id: str) -> bool:
+        if self._pool is None:
+            return False
+        async with self._pool.acquire() as conn:
+            r = await conn.execute("DELETE FROM evolution_tracks WHERE track_id = $1", track_id)
+        return r.startswith("DELETE") and not r.endswith(" 0")
+
+    async def update_track_champion(
+        self,
+        track_id: str,
+        *,
+        run_id: str,
+        generation: int,
+        adapter_path: str | None,
+        scores: dict,
+    ) -> None:
+        if self._pool is None:
+            return
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE evolution_tracks SET
+                    champion_run_id = $2,
+                    champion_generation = $3,
+                    champion_adapter_path = $4,
+                    champion_scores = $5::jsonb,
+                    updated_at = NOW()
+                WHERE track_id = $1
+                """,
+                track_id,
+                run_id,
+                int(generation),
+                adapter_path,
+                json.dumps(scores or {}),
+            )
+
+    async def list_track_generations(self, track_id: str, *, limit: int = 200) -> list[dict]:
+        if self._pool is None:
+            return []
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM track_generations
+                WHERE track_id = $1
+                ORDER BY generation ASC
+                LIMIT $2
+                """,
+                track_id,
+                int(limit),
+            )
+        return [_normalize_track_gen_row(dict(r)) for r in rows]
+
+    async def insert_track_generation(self, payload: dict) -> None:
+        if self._pool is None:
+            return
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO track_generations
+                    (track_id, generation, run_id, scores, promoted, adapter_path,
+                     training_duration_sec, eval_duration_sec)
+                VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8)
+                """,
+                str(payload["track_id"]),
+                int(payload.get("generation", 0)),
+                payload.get("run_id"),
+                json.dumps(payload.get("scores") or {}),
+                bool(payload.get("promoted", False)),
+                payload.get("adapter_path"),
+                payload.get("training_duration_sec"),
+                payload.get("eval_duration_sec"),
+            )
+
+
+def _coerce_jsonb(val: Any) -> Any:
+    """asyncpg returns JSONB as a python value when the codec is registered, or
+    as a string otherwise. Always return the python form."""
+    if isinstance(val, (dict, list)):
+        return val
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except Exception:
+            return val
+    return val
+
+
+def _normalize_track_row(row: dict) -> dict:
+    out = dict(row)
+    out["target_benchmarks"] = _coerce_jsonb(out.get("target_benchmarks")) or []
+    out["champion_scores"] = _coerce_jsonb(out.get("champion_scores")) or {}
+    return out
+
+
+def _normalize_track_gen_row(row: dict) -> dict:
+    out = dict(row)
+    out["scores"] = _coerce_jsonb(out.get("scores")) or {}
+    return out
