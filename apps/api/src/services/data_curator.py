@@ -212,6 +212,29 @@ class HuggingFaceDataCurator:
 
         ds_out = Dataset.from_list(samples)
         ds_out.save_to_disk(out_dir)
+
+        # `Dataset.save_to_disk()` writes its own dataset_info.json without
+        # `num_samples`, `categories`, or `sources`. Persist a small sidecar
+        # `mf_meta.json` so the API listing can show real metadata without
+        # re-loading the arrow shard.
+        try:
+            import json as _json
+            meta_path = os.path.join(out_dir, "mf_meta.json")
+            with open(meta_path, "w", encoding="utf-8") as fh:
+                _json.dump(
+                    {
+                        "num_samples": int(len(ds_out)),
+                        "categories": list(categories),
+                        "sources": sorted(set(sources)) if sources else ["huggingface"],
+                        "weakness_report": str(weakness_report)[:500],
+                        "max_samples": int(max_samples),
+                        "generation": int(generation),
+                    },
+                    fh,
+                )
+        except Exception as exc:
+            logger.debug("[curator] mf_meta.json write skipped: %s", exc)
+
         logger.info("[curator] saved %d samples to %s", len(ds_out), out_dir)
 
         return CurationResult(

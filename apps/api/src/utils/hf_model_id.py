@@ -10,6 +10,7 @@ _DEFAULT_FALLBACK = "meta-llama/Llama-3.1-8B-Instruct"
 
 # Lowercase Ollama-style tags -> canonical HF instruct checkpoints (common defaults).
 _OLLAMA_TAG_TO_HF: dict[str, str] = {
+    # Llama 3.x family
     "llama3.2:3b": "meta-llama/Llama-3.2-3B-Instruct",
     "llama3.2-3b": "meta-llama/Llama-3.2-3B-Instruct",
     "llama3.2:1b": "meta-llama/Llama-3.2-1B-Instruct",
@@ -20,6 +21,25 @@ _OLLAMA_TAG_TO_HF: dict[str, str] = {
     "llama3.1-70b": "meta-llama/Llama-3.1-70B-Instruct",
     "llama3:8b": "meta-llama/Meta-Llama-3-8B-Instruct",
     "llama3-8b": "meta-llama/Meta-Llama-3-8B-Instruct",
+    # TinyLlama (the bare ollama tag has no `:size` so include both)
+    "tinyllama": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "tinyllama:1.1b": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "tinyllama-1.1b": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    # Qwen 2.5
+    "qwen2.5:1.5b": "Qwen/Qwen2.5-1.5B-Instruct",
+    "qwen2.5-1.5b": "Qwen/Qwen2.5-1.5B-Instruct",
+    "qwen2.5:3b": "Qwen/Qwen2.5-3B-Instruct",
+    "qwen2.5-3b": "Qwen/Qwen2.5-3B-Instruct",
+    "qwen2.5:7b": "Qwen/Qwen2.5-7B-Instruct",
+    "qwen2.5-7b": "Qwen/Qwen2.5-7B-Instruct",
+    # Phi 3.5
+    "phi3.5": "microsoft/Phi-3.5-mini-instruct",
+    "phi3.5:mini": "microsoft/Phi-3.5-mini-instruct",
+    "phi3.5-mini": "microsoft/Phi-3.5-mini-instruct",
+    # Mistral 7B
+    "mistral:7b": "mistralai/Mistral-7B-Instruct-v0.3",
+    "mistral-7b": "mistralai/Mistral-7B-Instruct-v0.3",
+    "mistral": "mistralai/Mistral-7B-Instruct-v0.3",
 }
 
 

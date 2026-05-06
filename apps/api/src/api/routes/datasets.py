@@ -70,21 +70,33 @@ def _scan_curated(data_root: Path) -> list[DatasetSummary]:
         except ValueError:
             gen = 0
         size_mb = sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) / (1024 * 1024)
-        meta_fp = p / "dataset_info.json"
+        # Prefer our sidecar (categories, num_samples, sources) — the curator
+        # writes this alongside the arrow shard. Fall back to `dataset_info.json`
+        # for backward compat with older runs that pre-date the sidecar.
         n_samples = 0
         categories: list[str] = []
         sources: list[str] = []
-        if meta_fp.is_file():
+        mf_meta_fp = p / "mf_meta.json"
+        if mf_meta_fp.is_file():
             try:
-                meta = json.loads(meta_fp.read_text(encoding="utf-8"))
+                meta = json.loads(mf_meta_fp.read_text(encoding="utf-8"))
                 n_samples = int(meta.get("num_samples", 0))
                 categories = list(meta.get("categories") or [])
                 sources = list(meta.get("sources") or [])
             except Exception:
                 pass
-        # `dataset_info.json` from `Dataset.save_to_disk()` doesn't include row
-        # counts; fall back to actually counting rows in the arrow shard so the
-        # UI doesn't show "0 samples" for a populated dataset.
+        if n_samples == 0:
+            meta_fp = p / "dataset_info.json"
+            if meta_fp.is_file():
+                try:
+                    meta = json.loads(meta_fp.read_text(encoding="utf-8"))
+                    n_samples = int(meta.get("num_samples", 0))
+                    categories = list(meta.get("categories") or categories)
+                    sources = list(meta.get("sources") or sources)
+                except Exception:
+                    pass
+        # Last resort: actually count rows in the arrow shard (slow on large
+        # datasets but cached by the OS page cache after the first hit).
         if n_samples == 0:
             for shard in sorted(p.glob("data-*.arrow")):
                 n_samples += _count_arrow_rows(shard)

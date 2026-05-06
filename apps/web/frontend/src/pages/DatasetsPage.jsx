@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Database, Trash2, Upload } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Database, RefreshCw, Trash2, Upload } from 'lucide-react';
 import {
   BarChart,
   Bar,
@@ -26,24 +26,65 @@ export default function DatasetsPage() {
   const [quality, setQuality] = useState(null);
   const [drag, setDrag] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  // Track previous count so we can briefly highlight new datasets the curator
+  // just dropped (during evolution runs, gen-N appears mid-flight).
+  const prevCountRef = useRef(0);
+  const [flashId, setFlashId] = useState(null);
 
-  const loadList = useCallback(async () => {
-    setLoading(true);
+  /**
+   * @param {boolean} silent - true when triggered by the auto-refresh tick;
+   *   suppresses the loading spinner so the list doesn't blink every poll.
+   */
+  const loadList = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const d = await fetchDatasets();
       setList(d);
       setWarn(null);
+      setLastUpdated(Date.now());
+      const incoming = d?.datasets || [];
+      // Detect newly-arrived datasets (curated dirs the API hadn't seen on
+      // the previous poll). Flash the latest one for ~3s.
+      if (silent && incoming.length > prevCountRef.current) {
+        const newest = [...incoming].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))[0];
+        if (newest) {
+          setFlashId(newest.dataset_id);
+          setTimeout(() => setFlashId((curr) => (curr === newest.dataset_id ? null : curr)), 3000);
+        }
+      }
+      prevCountRef.current = incoming.length;
     } catch (e) {
-      setList({ datasets: [], total: 0 });
+      if (!silent) setList({ datasets: [], total: 0 });
       const st = e?.status;
-      setWarn(st === 401 || st === 403 ? 'API key not configured — check Settings.' : 'Could not load datasets — check API connectivity.');
+      if (!silent) setWarn(st === 401 || st === 403 ? 'API key not configured — check Settings.' : 'Could not load datasets — check API connectivity.');
     }
-    setLoading(false);
+    if (!silent) setLoading(false);
   }, []);
 
   useEffect(() => {
-    loadList();
+    loadList(false);
   }, [loadList]);
+
+  // Auto-refresh: poll every 5s while enabled. Cheap (single endpoint, ~50ms)
+  // and immediately surfaces new curator outputs during evolution runs.
+  useEffect(() => {
+    if (!autoRefresh) return undefined;
+    const iv = setInterval(() => loadList(true), 5000);
+    return () => clearInterval(iv);
+  }, [autoRefresh, loadList]);
+
+  // If a dataset is currently selected and its sample count changes (curator
+  // appended rows), re-fetch its preview so the right-hand panel stays fresh.
+  useEffect(() => {
+    if (!selected || !list?.datasets) return;
+    const sel = list.datasets.find((d) => d.dataset_id === selected);
+    if (sel && preview && sel.num_samples !== preview.total) {
+      // Best-effort re-fetch; ignored if the API doesn't return total.
+      getDataset(selected).then(setPreview).catch(() => {});
+    }
+  }, [list, selected, preview]);
 
   async function openDataset(id) {
     setSelected(id);
@@ -91,11 +132,66 @@ export default function DatasetsPage() {
     <div style={{ padding: '8px 0 40px', maxWidth: 1200, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
         <Database size={22} color={C.acc} />
-        <div>
+        <div style={{ flex: 1 }}>
           <h1 style={{ fontFamily: F.display, fontSize: 26, color: C.txtP, margin: 0 }}>Datasets</h1>
           <p style={{ fontFamily: F.ui, fontSize: 13, color: C.txtM, margin: '4px 0 0' }}>
             Curated evolution data and custom JSONL uploads
           </p>
+        </div>
+        {/* Live-refresh controls — saves the user from F5'ing during a run. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontFamily: F.mono, fontSize: 11, color: C.txtM }}>
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: 999,
+              background: autoRefresh ? C.acc : C.txtM,
+              boxShadow: autoRefresh ? `0 0 8px ${C.acc}` : 'none',
+              animation: autoRefresh ? 'mf-topbar-pulse 1.4s ease-out infinite' : 'none',
+            }}
+            aria-hidden
+          />
+          <span title="Polls /api/datasets every 5s when enabled">
+            {autoRefresh ? 'Live · ' : 'Paused · '}
+            {lastUpdated ? new Date(lastUpdated).toLocaleTimeString() : '—'}
+          </span>
+          <button
+            type="button"
+            onClick={() => setAutoRefresh((v) => !v)}
+            style={{
+              padding: '4px 10px',
+              fontSize: 11,
+              background: 'transparent',
+              border: `1px solid ${C.border}`,
+              borderRadius: 6,
+              color: C.txtS,
+              cursor: 'pointer',
+              fontFamily: F.ui,
+            }}
+          >
+            {autoRefresh ? 'Pause' : 'Resume'}
+          </button>
+          <button
+            type="button"
+            onClick={() => loadList(false)}
+            title="Refresh now"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '4px 10px',
+              fontSize: 11,
+              background: 'transparent',
+              border: `1px solid ${C.border}`,
+              borderRadius: 6,
+              color: C.txtS,
+              cursor: 'pointer',
+              fontFamily: F.ui,
+            }}
+          >
+            <RefreshCw size={11} />
+            Refresh
+          </button>
         </div>
       </div>
 
@@ -195,7 +291,12 @@ export default function DatasetsPage() {
                 No datasets yet — datasets are created during evolution or uploaded manually.
               </div>
             ) : (
-              ds.map((d) => (
+              ds.map((d) => {
+                const isFlashing = flashId === d.dataset_id;
+                const created = d.created_at ? new Date(d.created_at) : null;
+                const createdLabel = created ? created.toLocaleString() : null;
+                const cats = (d.categories || []).filter(Boolean);
+                return (
                 <button
                   key={d.dataset_id}
                   type="button"
@@ -205,22 +306,53 @@ export default function DatasetsPage() {
                     justifyContent: 'space-between',
                     alignItems: 'center',
                     padding: '12px 14px',
-                    background: selected === d.dataset_id ? C.bgE : C.bgS,
-                    border: `1px solid ${selected === d.dataset_id ? C.acc : C.border}`,
+                    background: isFlashing
+                      ? 'rgba(118,185,0,0.12)'
+                      : selected === d.dataset_id ? C.bgE : C.bgS,
+                    border: `1px solid ${
+                      isFlashing ? C.acc : selected === d.dataset_id ? C.acc : C.border
+                    }`,
                     borderRadius: 8,
                     cursor: 'pointer',
                     color: C.txtP,
                     fontFamily: F.ui,
                     fontSize: 13,
                     textAlign: 'left',
+                    transition: 'background 400ms, border-color 400ms',
                   }}
                 >
-                  <span>
+                  <span style={{ minWidth: 0, flex: 1 }}>
                     <span style={{ fontFamily: F.mono, color: C.acc }}>{d.dataset_id}</span>
                     <span style={{ color: C.txtM, marginLeft: 8, fontSize: 11 }}>{d.kind}</span>
-                    <div style={{ fontSize: 11, color: C.txtM, marginTop: 4 }}>
-                      {d.num_samples} samples · {Number(d.size_mb || 0).toFixed(2)} MB
+                    {isFlashing ? (
+                      <span style={{ marginLeft: 8, fontSize: 10, color: C.acc, fontFamily: F.mono, letterSpacing: '0.06em' }}>
+                        ★ NEW
+                      </span>
+                    ) : null}
+                    <div style={{ fontSize: 11, color: C.txtM, marginTop: 4, fontFamily: F.mono }}>
+                      {Number(d.num_samples || 0).toLocaleString()} samples · {Number(d.size_mb || 0).toFixed(2)} MB
+                      {createdLabel ? <> · {createdLabel}</> : null}
                     </div>
+                    {cats.length ? (
+                      <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                        {cats.slice(0, 6).map((c) => (
+                          <span
+                            key={c}
+                            style={{
+                              padding: '1px 6px',
+                              fontSize: 10,
+                              fontFamily: F.mono,
+                              color: C.txtM,
+                              background: 'rgba(118,185,0,0.06)',
+                              border: `1px solid ${C.border}`,
+                              borderRadius: 999,
+                            }}
+                          >
+                            {c}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                   </span>
                   {d.kind === 'custom' && (
                     <span
@@ -228,7 +360,7 @@ export default function DatasetsPage() {
                       tabIndex={0}
                       onClick={(ev) => {
                         ev.stopPropagation();
-                        if (window.confirm('Delete this dataset?')) deleteDataset(d.dataset_id).then(loadList);
+                        if (window.confirm('Delete this dataset?')) deleteDataset(d.dataset_id).then(() => loadList(false));
                       }}
                       onKeyDown={() => {}}
                       style={{ color: C.danger }}
@@ -237,7 +369,8 @@ export default function DatasetsPage() {
                     </span>
                   )}
                 </button>
-              ))
+                );
+              })
             )}
           </div>
         </div>
