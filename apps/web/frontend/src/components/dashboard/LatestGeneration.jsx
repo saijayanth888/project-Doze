@@ -1,13 +1,59 @@
+import { useEffect, useMemo, useState } from 'react';
 import { C, F } from '../../config/colors';
-import { GENS } from '../../config/mockData';
+import { apiFetch } from '../../config/api';
 import Badge from '../shared/Badge';
 
 export default function LatestGeneration() {
-  const gen = GENS[GENS.length - 1];
-  if (!gen) return null;
+  const [gens, setGens] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const parentScores = gen.parent_scores ?? gen.parentScores ?? {};
-  const childScores = gen.child_scores ?? gen.childScores ?? {};
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    apiFetch('/api/lineage/generations')
+      .then((rows) => {
+        if (!cancelled && Array.isArray(rows)) setGens(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setGens([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const gen = useMemo(() => {
+    if (!gens.length) return null;
+    const sorted = [...gens].sort((a, b) => (a.generation ?? 0) - (b.generation ?? 0));
+    return sorted[sorted.length - 1];
+  }, [gens]);
+
+  if (loading) {
+    return (
+      <div className="mf-card-hover" style={{ background: C.bgC, border: `1px solid ${C.border}`, borderRadius: 8, padding: 18, height: '100%', boxSizing: 'border-box' }}>
+        <span style={{ fontFamily: F.ui, fontSize: 13, color: C.txtM }}>Loading…</span>
+      </div>
+    );
+  }
+
+  if (!gen) {
+    return (
+      <div className="mf-card-hover" style={{ background: C.bgC, border: `1px solid ${C.border}`, borderRadius: 8, padding: 18, height: '100%', boxSizing: 'border-box' }}>
+        <div style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: C.txtM, marginBottom: 10 }}>
+          Latest Generation
+        </div>
+        <p style={{ fontFamily: F.ui, fontSize: 13, color: C.txtM, lineHeight: 1.5, margin: 0 }}>
+          No generations yet — complete an evolution run to see parent vs child scores here.
+        </p>
+      </div>
+    );
+  }
+
+  const parentScores = gen.parent_scores ?? {};
+  const childScores = gen.child_scores ?? {};
   const pVals = Object.values(parentScores);
   const cVals = Object.values(childScores);
   const parentAvg = pVals.length ? pVals.reduce((a, b) => a + b, 0) / pVals.length : 0;
@@ -21,7 +67,6 @@ export default function LatestGeneration() {
         <Badge type={gen.promoted ? 'promoted' : 'discarded'}>{gen.promoted ? 'Promoted' : 'Discarded'}</Badge>
       </div>
 
-      {/* Parent vs child avg */}
       <div style={{ display: 'flex', gap: 20, marginBottom: 14, alignItems: 'flex-end' }}>
         <div>
           <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: C.txtM, marginBottom: 3 }}>Parent</div>
@@ -37,14 +82,14 @@ export default function LatestGeneration() {
         <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
           <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: C.txtM, marginBottom: 3 }}>Delta</div>
           <div style={{ fontFamily: F.mono, fontSize: '1.6rem', fontWeight: 600, color: delta > 0 ? C.success : C.danger, lineHeight: 1 }}>
-            {delta > 0 ? '+' : ''}{delta.toFixed(3)}
+            {delta > 0 ? '+' : ''}
+            {delta.toFixed(3)}
           </div>
         </div>
       </div>
 
-      {/* Benchmark breakdown */}
       <div style={{ marginBottom: 12 }}>
-        {Object.keys(parentScores).map(bench => {
+        {Object.keys(parentScores).map((bench) => {
           const pd = parentScores[bench];
           const cd = childScores[bench];
           const d = cd - pd;
@@ -53,7 +98,8 @@ export default function LatestGeneration() {
               <span style={{ fontFamily: F.mono, fontSize: 11, color: C.txtM, width: 110, flexShrink: 0 }}>{bench}</span>
               <span style={{ fontFamily: F.mono, fontSize: 11, color: C.txtS, width: 48 }}>{pd.toFixed(3)}</span>
               <span style={{ fontFamily: F.mono, fontSize: 11, color: d > 0 ? C.success : d < 0 ? C.danger : C.txtM, width: 56, fontWeight: 600 }}>
-                {d > 0 ? '+' : ''}{d.toFixed(3)}
+                {d > 0 ? '+' : ''}
+                {d.toFixed(3)}
               </span>
             </div>
           );
@@ -61,8 +107,7 @@ export default function LatestGeneration() {
       </div>
 
       <div style={{ fontFamily: F.mono, fontSize: 10, color: C.txtM }}>
-        {(gen.training_data_size ?? gen.trainingDataSize)?.toLocaleString?.() ?? '—'} samples ·{' '}
-        {gen.decision_reason ?? gen.decisionReason ?? '—'}
+        {gen.training_data_size?.toLocaleString?.() ?? '—'} samples · {gen.decision_reason ?? '—'}
       </div>
     </div>
   );

@@ -20,6 +20,9 @@ export default defineConfig({
   use: {
     baseURL,
     trace: "on-first-retry",
+    ...(process.env.MODELFORGE_API_KEY
+      ? { extraHTTPHeaders: { "X-API-Key": process.env.MODELFORGE_API_KEY } }
+      : {}),
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: externalBase

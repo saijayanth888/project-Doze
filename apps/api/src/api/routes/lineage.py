@@ -1,18 +1,60 @@
 """Lineage tree and activity feed routes."""
 
+import json
 import logging
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends
 
 from api.deps import get_db
 from api.schemas.lineage import LineageEdge, LineageNodeSchema, LineageTree
+from api.schemas.models import GenerationInfo
 from services.lineage_db import LineageDB
-from services.mock_data import mock_activity_feed, mock_lineage_tree
 
 logger = logging.getLogger("modelforge.routes.lineage")
 
 router = APIRouter()
+
+
+def _parse_score_dict(val: Any) -> dict[str, float]:
+    if val is None:
+        return {}
+    if isinstance(val, dict):
+        out: dict[str, float] = {}
+        for k, v in val.items():
+            try:
+                out[str(k)] = float(v)
+            except (TypeError, ValueError):
+                pass
+        return out
+    if isinstance(val, str):
+        try:
+            return _parse_score_dict(json.loads(val))
+        except Exception:
+            return {}
+    return {}
+
+
+def _row_to_generation_info(row: dict[str, Any]) -> GenerationInfo:
+    ts = row.get("created_at")
+    created_at: datetime | None = ts if isinstance(ts, datetime) else None
+    td = row.get("training_data_size")
+    training_data_size = int(td) if td is not None else 0
+    dur = row.get("duration_seconds")
+    duration_seconds = float(dur) if dur is not None else 0.0
+    return GenerationInfo(
+        generation=int(row.get("generation", 0)),
+        run_id=row.get("run_id"),
+        promoted=bool(row.get("promoted", False)),
+        parent_scores=_parse_score_dict(row.get("parent_scores")),
+        child_scores=_parse_score_dict(row.get("child_scores")),
+        decision_reason=row.get("decision_reason"),
+        method=row.get("method"),
+        training_data_size=training_data_size,
+        duration_seconds=duration_seconds,
+        created_at=created_at,
+    )
 
 
 def _build_lineage_tree(generations: list[dict]) -> LineageTree:
@@ -84,31 +126,47 @@ def _build_lineage_tree(generations: list[dict]) -> LineageTree:
     )
 
 
+@router.get("/generations", response_model=list[GenerationInfo])
+async def list_generations(db: LineageDB = Depends(get_db)) -> list[GenerationInfo]:
+    """All evolution generations (for dashboards — parent vs child scores)."""
+    try:
+        if not await db.has_evolution_runs():
+            return []
+        rows = await db.get_all_generations()
+    except Exception as exc:
+        logger.warning("DB unavailable for generations list: %s", exc)
+        rows = []
+    return [_row_to_generation_info(r) for r in rows]
+
+
 @router.get("/tree", response_model=LineageTree)
 async def get_lineage_tree(
     db: LineageDB = Depends(get_db),
 ) -> LineageTree:
-    """Return the full lineage tree (nodes + edges).
-
-    Falls back to mock data when the DB is unavailable or empty.
-    """
+    """Return the full lineage tree (nodes + edges). Empty when no rows exist."""
     try:
+        if not await db.has_evolution_runs():
+            return LineageTree(
+                nodes=[],
+                edges=[],
+                total_nodes=0,
+                total_promoted=0,
+                total_discarded=0,
+                champion_id=None,
+            )
         generations = await db.get_all_generations()
     except Exception as exc:
-        logger.warning("DB unavailable for lineage tree, using mock: %s", exc)
+        logger.warning("DB unavailable for lineage tree: %s", exc)
         generations = []
 
     if not generations:
-        mock = mock_lineage_tree()
-        nodes = [LineageNodeSchema(**n) for n in mock["nodes"]]
-        edges = [LineageEdge(**e) for e in mock["edges"]]
         return LineageTree(
-            nodes=nodes,
-            edges=edges,
-            total_nodes=mock["total_nodes"],
-            total_promoted=mock["total_promoted"],
-            total_discarded=mock["total_discarded"],
-            champion_id=mock["champion_id"],
+            nodes=[],
+            edges=[],
+            total_nodes=0,
+            total_promoted=0,
+            total_discarded=0,
+            champion_id=None,
         )
 
     return _build_lineage_tree(generations)
@@ -120,13 +178,15 @@ async def get_activity_feed(
 ) -> list[dict]:
     """Return the 8 most recent evolution events."""
     try:
+        if not await db.has_evolution_runs():
+            return []
         generations = await db.get_all_generations()
     except Exception as exc:
-        logger.warning("DB unavailable for activity feed, using mock: %s", exc)
+        logger.warning("DB unavailable for activity feed: %s", exc)
         generations = []
 
     if not generations:
-        return mock_activity_feed()
+        return []
 
     # Build a synthetic activity feed from generation rows
     events: list[dict] = []
@@ -138,19 +198,22 @@ async def get_activity_feed(
         promoted = bool(gen.get("promoted", False))
         created_at = gen.get("created_at") or gen.get("timestamp")
 
+        msg = (
+            f"Generation {gen_num} promoted to champion"
+            if promoted and gen.get("is_champion")
+            else f"Generation {gen_num} {'promoted' if promoted else 'discarded'}"
+        )
+        evt_type = (
+            "champion_promoted"
+            if promoted and gen.get("is_champion")
+            else "generation_complete"
+        )
         events.append(
             {
                 "id": f"evt-gen-{gen_num}",
-                "type": "generation_complete"
-                if not promoted
-                else "champion_promoted"
-                if gen.get("is_champion")
-                else "generation_complete",
-                "message": (
-                    f"Generation {gen_num} promoted to champion"
-                    if promoted and gen.get("is_champion")
-                    else f"Generation {gen_num} {'promoted' if promoted else 'discarded'}"
-                ),
+                "type": evt_type,
+                "event": msg,
+                "message": msg,
                 "generation": gen_num,
                 "run_id": run_id,
                 "timestamp": str(created_at) if created_at else None,

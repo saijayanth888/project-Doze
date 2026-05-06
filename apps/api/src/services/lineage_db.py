@@ -128,6 +128,18 @@ class LineageDB:
             row = await conn.fetchrow("SELECT * FROM evolution_runs WHERE run_id = $1", run_id)
             return dict(row) if row else None
 
+    async def has_evolution_runs(self) -> bool:
+        """True when at least one row exists in ``evolution_runs``.
+
+        Used to avoid showing orphan ``benchmark_scores`` / ``generations`` rows
+        when the dashboard evolution poll reports no run (empty ``evolution_runs``).
+        """
+        if self._pool is None:
+            return False
+        async with self._pool.acquire() as conn:
+            n = await conn.fetchval("SELECT COUNT(*)::bigint FROM evolution_runs")
+            return int(n or 0) > 0
+
     async def get_dashboard_run(self) -> dict | None:
         """Prefer an in-flight run; otherwise the most recent run (any status)."""
         if self._pool is None:

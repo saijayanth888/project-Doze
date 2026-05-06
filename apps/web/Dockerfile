@@ -8,9 +8,19 @@ RUN npm ci --prefer-offline --no-audit --no-fund
 
 COPY apps/web/frontend/ ./
 
-# Empty = same-origin /api via nginx (see infra/nginx.conf).
+# Empty API base = same-origin /api via nginx (see infra/nginx.conf).
 ARG VITE_API_BASE_URL=
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+# Used by Settings defaults (see SettingsPage.jsx).
+ARG VITE_OLLAMA_HOST=http://localhost:11434
+ENV VITE_OLLAMA_HOST=$VITE_OLLAMA_HOST
+ARG VITE_VLLM_HOST=http://localhost:8001
+ENV VITE_VLLM_HOST=$VITE_VLLM_HOST
+ARG VITE_N8N_HOST=http://localhost:5679
+ENV VITE_N8N_HOST=$VITE_N8N_HOST
+# Optional LAN/private deploy: default API key so dashboard loads without Settings (do not publish image publicly).
+ARG VITE_MODELFORGE_API_KEY=
+ENV VITE_MODELFORGE_API_KEY=$VITE_MODELFORGE_API_KEY
 RUN npm run build
 
 ## ── Runtime stage ────────────────────────────────────

@@ -157,14 +157,32 @@ export default function TopBar({ champion = null }) {
           </span>
         </div>
 
-        {/* Champion trophy */}
+        {/* Generation / idle (avoid fake Gen 0 when no run) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, borderLeft: `1px solid ${C.border}`, paddingLeft: 16 }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.acc} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/>
-            <path d="M4 22h16"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>
-          </svg>
-          <span style={{ fontFamily: F.mono, fontSize: 11, color: C.acc, fontWeight: 600 }}>
-            Gen {champion?.generation ?? evolve?.generation ?? '—'}
+          {(champion?.generation ?? 0) > 0 ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.acc} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6" />
+              <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18" />
+              <path d="M4 22h16" />
+              <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z" />
+            </svg>
+          ) : null}
+          <span
+            style={{
+              fontFamily: F.mono,
+              fontSize: 11,
+              color:
+                (champion?.generation ?? 0) > 0 || evolve?.status === 'running' || ((evolve?.generation ?? 0) > 0 && evolve?.run_id)
+                  ? C.acc
+                  : C.txtM,
+              fontWeight: 600,
+            }}
+          >
+            {(champion?.generation ?? 0) > 0
+              ? `Gen ${champion.generation}`
+              : evolve?.status === 'running' || ((evolve?.generation ?? 0) > 0 && evolve?.run_id)
+                ? `Gen ${evolve.generation}`
+                : 'Idle'}
           </span>
         </div>
       </div>

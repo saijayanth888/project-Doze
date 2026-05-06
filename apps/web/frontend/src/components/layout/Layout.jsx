@@ -10,7 +10,10 @@ export default function Layout() {
   const [champion, setChampion] = useState(null);
 
   useEffect(() => {
-    const load = () => apiFetch('/api/models/champion').then(setChampion).catch(() => {});
+    const load = () =>
+      apiFetch('/api/models/champion')
+        .then(setChampion)
+        .catch(() => setChampion(null));
     load();
     const iv = setInterval(load, 15_000);
     return () => clearInterval(iv);

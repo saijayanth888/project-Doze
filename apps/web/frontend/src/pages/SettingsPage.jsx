@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Eye, EyeOff, RotateCcw } from 'lucide-react';
 import { C, F } from '../config/colors';
-import { apiFetch, getApiBase, setApiKey } from '../config/api';
+import { apiFetch, getApiBase, getApiKey, setApiKey } from '../config/api';
 import Button from '../components/shared/Button';
 import { useToast } from '../context/ToastContext';
 
@@ -175,9 +175,47 @@ export default function SettingsPage() {
               {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
           </div>
-          <div style={{ fontFamily: F.mono, fontSize: 11, color: C.txtM, marginTop: 6 }}>
-            Current API origin: <strong style={{ color: C.txtS }}>{getApiBase() || '(same-origin)'}</strong>
-            {apiKey.trim() ? ' · Key set' : ' · Key not set'}
+          <div style={{ fontFamily: F.mono, fontSize: 11, color: C.txtM, marginTop: 6, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <span>
+              Current API origin: <strong style={{ color: C.txtS }}>{getApiBase() || '(same-origin)'}</strong>
+            </span>
+            {(() => {
+              const effective = getApiKey();
+              const hasKey = !!effective?.trim();
+              let src = 'Not set';
+              if (hasKey) {
+                try {
+                  src = window.localStorage.getItem('modelforge_api_key')?.trim()
+                    ? 'Connected (browser)'
+                    : import.meta.env.VITE_MODELFORGE_API_KEY
+                      ? 'Connected (build-time)'
+                      : 'Connected';
+                } catch {
+                  src = import.meta.env.VITE_MODELFORGE_API_KEY ? 'Connected (build-time)' : 'Connected';
+                }
+              }
+              const bg = hasKey ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.12)';
+              const fg = hasKey ? C.success : C.danger;
+              const border = hasKey ? 'rgba(34,197,94,0.35)' : 'rgba(239,68,68,0.35)';
+              const label = hasKey ? `API Key: ${src}` : 'API Key: Not configured';
+              return (
+                <span
+                  style={{
+                    display: 'inline-block',
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                    fontSize: 10,
+                    fontWeight: 600,
+                    fontFamily: F.ui,
+                    background: bg,
+                    color: fg,
+                    border: `1px solid ${border}`,
+                  }}
+                >
+                  {label}
+                </span>
+              );
+            })()}
           </div>
         </div>
         <Field label="Ollama Host" value={ollama} onChange={setOllama} placeholder="http://localhost:11434" />

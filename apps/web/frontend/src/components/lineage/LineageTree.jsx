@@ -1,5 +1,4 @@
 import { useRef, useState, useEffect, useMemo, useCallback } from 'react';
-import { GENS, CHAMPION } from '../../config/mockData';
 import LineageNode from './LineageNode';
 
 const W = 120;
@@ -17,22 +16,6 @@ function normalizeApiNode(n) {
     decisionReason: n.decision_reason ?? n.decisionReason ?? '',
     parentId: n.parent_id ?? n.parentId ?? null,
   };
-}
-
-function layoutMockGens(gens) {
-  return gens.map((g, i) => {
-    const col = i % COLS;
-    const row = Math.floor(i / COLS);
-    return {
-      ...g,
-      id: g.id ?? `mock-gen-${g.generation}`,
-      x: PAD + col * W,
-      y: PAD + row * H,
-      isChampion: g.generation === CHAMPION?.generation,
-      childScores: g.child_scores ?? g.childScores ?? {},
-      scores: g.child_scores ?? g.childScores ?? {},
-    };
-  });
 }
 
 function layoutApiNodes(apiNodes) {
@@ -71,12 +54,12 @@ export default function LineageTree({
   const [dragStart, setDragStart] = useState(null);
 
   const { layouted, edgeLines, viewBox, vbWidth, vbHeight } = useMemo(() => {
-    const useApi = Array.isArray(apiNodes) && apiNodes.length > 0;
-    const layoutedNodes = useApi ? layoutApiNodes(apiNodes) : layoutMockGens(GENS);
-    const byId = Object.fromEntries(layoutedNodes.map(n => [n.id, n]));
+    const layoutedNodes =
+      Array.isArray(apiNodes) && apiNodes.length > 0 ? layoutApiNodes(apiNodes) : [];
+    const byId = Object.fromEntries(layoutedNodes.map((n) => [n.id, n]));
 
     let lines = [];
-    if (useApi && Array.isArray(apiEdges) && apiEdges.length) {
+    if (layoutedNodes.length && Array.isArray(apiEdges) && apiEdges.length) {
       lines = apiEdges
         .map((e) => {
           const s = byId[e.source];
@@ -85,7 +68,7 @@ export default function LineageTree({
           return { key: `${e.source}-${e.target}`, x1: s.x, y1: s.y, x2: t.x, y2: t.y, promoted: e.promoted };
         })
         .filter(Boolean);
-    } else {
+    } else if (layoutedNodes.length > 1) {
       lines = layoutedNodes.map((node, i) => {
         if (i === 0) return null;
         const parent = layoutedNodes[i - 1];
@@ -141,6 +124,30 @@ export default function LineageTree({
   }
 
   const resetView = () => setTransform({ x: 0, y: 0, scale: 1 });
+
+  if (Array.isArray(apiNodes) && apiNodes.length === 0) {
+    return (
+      <div
+        style={{
+          position: 'relative',
+          width: '100%',
+          height: '100%',
+          minHeight: 400,
+          borderRadius: 8,
+          border: '1px solid #1e293b',
+          background: '#06080d',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 24,
+        }}
+      >
+        <p style={{ fontFamily: 'DM Sans, system-ui, sans-serif', fontSize: 14, color: '#64748b', textAlign: 'center', maxWidth: 360, margin: 0 }}>
+          No lineage yet — evolution generations will appear here after your first run.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div

@@ -72,7 +72,11 @@ export default function LineagePage() {
         <StatCard label="Total Nodes" value={data.total_nodes} />
         <StatCard label="Promoted" value={data.total_promoted} color={C.acc} />
         <StatCard label="Discarded" value={data.total_discarded} color={C.danger} />
-        <StatCard label="Champion" value={`#${data.champion_id?.replace('gen-', '')}`} color={C.acc} />
+        <StatCard
+          label="Champion"
+          value={data.champion_id ? `#${String(data.champion_id).replace(/^gen-/, '')}` : '—'}
+          color={C.acc}
+        />
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>

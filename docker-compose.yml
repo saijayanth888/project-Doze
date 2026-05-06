@@ -63,6 +63,8 @@ services:
       - N8N_HOST=0.0.0.0
       - N8N_PORT=5678
       - N8N_PROTOCOL=http
+      # Required for HTTP via LAN IP / Tailscale (not localhost). Use true behind HTTPS in production.
+      - N8N_SECURE_COOKIE=${N8N_SECURE_COOKIE:-false}
       # Must match the host port you publish (see ports:). Override via N8N_WEBHOOK_URL when remapping.
       - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5679/}
       - N8N_BASIC_AUTH_ACTIVE=true
@@ -132,6 +134,11 @@ services:
       args:
         # Default empty: browser calls /api on the same host (nginx → api:8000).
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+        VITE_OLLAMA_HOST: ${VITE_OLLAMA_HOST:-http://localhost:11434}
+        VITE_VLLM_HOST: ${VITE_VLLM_HOST:-http://localhost:8001}
+        VITE_N8N_HOST: ${VITE_N8N_HOST:-http://localhost:5679}
+        # Same as MODELFORGE_API_KEY in `.env` — removes 401 spam until user overrides in Settings.
+        VITE_MODELFORGE_API_KEY: ${MODELFORGE_API_KEY:-}
     image: modelforge-frontend:latest
     container_name: mf-frontend
     ports:
@@ -171,8 +178,11 @@ services:
     profiles: ["gpu"]
     expose:
       - "8000"
+    ports:
+      # Browser / Settings UI on LAN (matches VITE_VLLM_HOST host port).
+      - "${VLLM_HOST_PORT:-8001}:8000"
     command: >
-      --model meta-llama/Llama-3.1-8B-Instruct
+      --model ${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}
       --dtype auto
       --api-key ${VLLM_API_KEY:?VLLM_API_KEY must be set when using the gpu profile}
       --max-model-len 8192

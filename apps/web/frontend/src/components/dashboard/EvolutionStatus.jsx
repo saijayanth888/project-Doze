@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import {
   LineChart,
@@ -124,6 +125,12 @@ export default function EvolutionStatus() {
 
   const isRunning = status.is_running === true || status.status === 'running';
 
+  const idleNoRun =
+    !isRunning &&
+    (status.status === 'idle' || !status.status) &&
+    (status.generation === 0 || status.generation == null) &&
+    !status.run_id;
+
   useEffect(() => {
     if (!isRunning || !status.run_id) {
       if (wsRef.current) {
@@ -217,6 +224,7 @@ export default function EvolutionStatus() {
 
   return (
     <div
+      data-testid="evolution-status-panel"
       className="mf-card-hover"
       style={{
         background: C.bgC,
@@ -294,7 +302,7 @@ export default function EvolutionStatus() {
         ) : null}
 
         <div style={{ display: 'flex', gap: 32, marginBottom: 20 }}>
-          <div>
+          <div style={{ flex: '1 1 40%', minWidth: 0 }}>
             <div
               style={{
                 fontSize: 9,
@@ -307,17 +315,32 @@ export default function EvolutionStatus() {
             >
               Generation
             </div>
-            <div
-              style={{
-                fontFamily: F.mono,
-                fontSize: '3rem',
-                fontWeight: 500,
-                color: C.txtP,
-                lineHeight: 1,
-              }}
-            >
-              {status.generation}
-            </div>
+            {idleNoRun ? (
+              <p
+                style={{
+                  fontFamily: F.ui,
+                  fontSize: 13,
+                  color: C.txtM,
+                  lineHeight: 1.5,
+                  margin: '4px 0 0 0',
+                  maxWidth: 320,
+                }}
+              >
+                No evolution run yet — click Start Evolution to begin.
+              </p>
+            ) : (
+              <div
+                style={{
+                  fontFamily: F.mono,
+                  fontSize: '3rem',
+                  fontWeight: 500,
+                  color: C.txtP,
+                  lineHeight: 1,
+                }}
+              >
+                {status.generation}
+              </div>
+            )}
           </div>
           <div>
             <div
@@ -555,36 +578,38 @@ export default function EvolutionStatus() {
         </div>
       </div>
 
-      {modalOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.55)',
-            zIndex: 1000,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 16,
-          }}
-          role="presentation"
-          onClick={() => setModalOpen(false)}
-        >
+      {modalOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
           <div
-            role="dialog"
-            aria-modal="true"
-            onClick={(e) => e.stopPropagation()}
             style={{
-              background: C.bgC,
-              border: `1px solid ${C.border}`,
-              borderRadius: 10,
-              padding: 20,
-              maxWidth: 440,
-              width: '100%',
-              maxHeight: '90vh',
-              overflow: 'auto',
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.55)',
+              zIndex: 10000,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 16,
             }}
+            role="presentation"
+            onClick={() => setModalOpen(false)}
           >
+            <div
+              role="dialog"
+              aria-modal="true"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                background: C.bgC,
+                border: `1px solid ${C.border}`,
+                borderRadius: 10,
+                padding: 20,
+                maxWidth: 440,
+                width: '100%',
+                maxHeight: '90vh',
+                overflow: 'auto',
+              }}
+            >
             <div style={{ fontFamily: F.ui, fontWeight: 700, color: C.txtP, marginBottom: 12 }}>
               Start evolution
             </div>
@@ -721,8 +746,9 @@ export default function EvolutionStatus() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+          document.body
+        )}
     </div>
   );
 }

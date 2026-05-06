@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class ScoreMap(BaseModel):
@@ -22,6 +22,10 @@ class ModelInfo(BaseModel):
 
 
 class ChampionInfo(BaseModel):
+    """Registry rows may include ``adapter_id``, ``name``, etc. — ignore extras."""
+
+    model_config = ConfigDict(extra="ignore")
+
     generation: int
     base_model: str
     adapter_path: str | None = None

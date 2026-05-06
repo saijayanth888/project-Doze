@@ -1,4 +1,4 @@
-.PHONY: help dev db-only api frontend up down build logs logs-api install install-dev clean health pull-model n8n-open dashboard-open test lint format test-e2e n8n-bootstrap
+.PHONY: help dev db-only api frontend up down build logs logs-api install install-dev clean health pull-model n8n-open dashboard-open test lint format test-e2e test-e2e-spark n8n-bootstrap first-run
 
 PYTHON ?= python3.13
 VENV   ?= .venv
@@ -17,7 +17,9 @@ help:
 	@echo "  down           docker compose down"
 	@echo "  build          docker compose build"
 	@echo "  test           pytest (apps/api)"
-	@echo "  test-e2e       Playwright browser tests (apps/web/frontend)"
+	@echo "  test-e2e       Playwright against default baseURL (often localhost — dev)"
+	@echo "  test-e2e-spark Playwright Spark suite (LAN_IP from .env; API via :3001 unless API_URL set)"
+	@echo "  first-run       Pre-flight checks + POST /api/evolve/start (uses scripts/start_first_evolution.sh)"
 	@echo "  n8n-bootstrap  Wait for n8n + create owner via REST (see .env)"
 	@echo "  lint           ruff + mypy"
 	@echo "  health         curl /api/system/health"
@@ -76,6 +78,20 @@ format:
 test-e2e:
 	cd $(WEB_DIR) && npx playwright install --with-deps
 	cd $(WEB_DIR) && npm run test:e2e
+
+# Uses PLAYWRIGHT_BASE_URL=http://$LAN_IP:3001 — run on the Spark host after `docker compose --profile gpu up -d`.
+test-e2e-spark:
+	@test -f .env || (echo "Missing .env — copy .env.example and set LAN_IP=" >&2; exit 1)
+	set -a && . ./.env && set +a && \
+	IP="$${LAN_IP:-192.168.1.49}" && \
+	cd $(WEB_DIR) && \
+	SPARK_IP="$$IP" PLAYWRIGHT_BASE_URL="http://$$IP:3001" \
+	N8N_URL="http://$$IP:5679" CI=1 \
+	npx playwright test e2e/spark-e2e.spec.ts --reporter=list
+
+first-run:
+	chmod +x scripts/start_first_evolution.sh
+	bash scripts/start_first_evolution.sh
 
 n8n-bootstrap:
 	chmod +x scripts/n8n-wait-and-login.sh

@@ -16,7 +16,6 @@ from api.schemas.evaluation import (
     ScoreTrend,
 )
 from services.lineage_db import LineageDB
-from services.mock_data import mock_score_trends
 
 logger = logging.getLogger("modelforge.routes.evaluation")
 
@@ -79,13 +78,25 @@ async def get_scores(
 ) -> ScoresResponse:
     """Return benchmark score trends across all generations."""
     try:
+        if not await db.has_evolution_runs():
+            return ScoresResponse(
+                total_datapoints=0,
+                generations=0,
+                benchmarks=0,
+                trends=[],
+            )
         raw_trends = await db.get_score_trends()
     except Exception as exc:
-        logger.warning("DB unavailable for score trends, using mock: %s", exc)
+        logger.warning("DB unavailable for score trends: %s", exc)
         raw_trends = []
 
     if not raw_trends:
-        raw_trends = mock_score_trends()
+        return ScoresResponse(
+            total_datapoints=0,
+            generations=0,
+            benchmarks=0,
+            trends=[],
+        )
 
     trends = [ScoreTrend(**t) for t in raw_trends]
 
@@ -113,13 +124,15 @@ async def get_generation_results(
 ) -> list[BenchmarkResult]:
     """Return per-generation aggregated benchmark scores."""
     try:
+        if not await db.has_evolution_runs():
+            return []
         raw_trends = await db.get_score_trends()
     except Exception as exc:
-        logger.warning("DB unavailable for generation results, using mock: %s", exc)
+        logger.warning("DB unavailable for generation results: %s", exc)
         raw_trends = []
 
     if not raw_trends:
-        raw_trends = mock_score_trends()
+        return []
 
     # Group trends by generation, collect child_score per benchmark
     gen_scores: dict[int, dict[str, float]] = defaultdict(dict)
