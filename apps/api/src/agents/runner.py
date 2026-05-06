@@ -186,6 +186,11 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     "pareto_report": s.get("pareto_report"),
                     "training_seconds": float(s.get("training_seconds") or 0.0),
                     "eval_seconds": float(s.get("eval_seconds") or 0.0),
+                    # Resolved canonical HuggingFace id for the run's base
+                    # model (e.g. "meta-llama/Llama-3.2-3B-Instruct" even when
+                    # the user-typed config had `llama3.2:3b`). Set by
+                    # augment_training; harmless when unset for old rows.
+                    "base_model_hf_id": s.get("base_model_hf_id"),
                 },
             )
             for benchmark, score in s.get("child_scores", {}).items():

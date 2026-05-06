@@ -295,11 +295,29 @@ def build_graph(
             await _emit(state, "augment_training")
             return state
 
+        # Resolve the run's base model to its canonical HuggingFace id for
+        # the experiment record. The teacher used for self-generation stays
+        # `SELF_GEN_TEACHER_TAG` (an Ollama tag like `llama3.2:3b`) since the
+        # call goes via Ollama; resolving the *run's* base model gives
+        # downstream record consumers the unambiguous HF id without
+        # re-deriving it.
+        cfg = state.get("config", {}) or {}
+        try:
+            from utils.hf_model_id import resolve_hf_base_model_id
+            base_hf_id = resolve_hf_base_model_id(cfg.get("base_model"))
+        except Exception:
+            base_hf_id = str(cfg.get("base_model") or "")
+        state["base_model_hf_id"] = base_hf_id
+
         _phase_start(
             state,
             phase="curate",
             label="Augmenting with self-generated samples",
-            sub=f"teacher={SELF_GEN_TEACHER_TAG} · seeds={SELF_GEN_SEED_COUNT}",
+            sub=f"teacher={SELF_GEN_TEACHER_TAG} · base={base_hf_id} · seeds={SELF_GEN_SEED_COUNT}",
+        )
+        logger.info(
+            "[augment] base_model=%s (resolved to HF id=%s) · teacher=%s · seeds=%d",
+            cfg.get("base_model"), base_hf_id, SELF_GEN_TEACHER_TAG, SELF_GEN_SEED_COUNT,
         )
 
         # Lazy imports — keep evolution_graph importable in stripped-down envs.

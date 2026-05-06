@@ -201,52 +201,85 @@ services:
       retries: 3
     restart: unless-stopped
 
-  # Optional: containerized Ollama. Skip this if you use host systemd Ollama (`ollama serve`).
-  ollama:
-    image: ollama/ollama:latest
-    container_name: mf-ollama
-    profiles: ["gpu"]
-    expose:
-      - "11434"
-    volumes:
-      - ollama_models:/root/.ollama
-    environment:
-      - OLLAMA_HOST=0.0.0.0
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: ["gpu"]
-    restart: unless-stopped
+  # ─── Ollama strategy (pick ONE) ──────────────────────────────────────
+  #
+  # Ollama is REQUIRED for inference (Playground, ForgeAgent, self-distillation
+  # teacher in EPT/augment_training). There are two ways to run it:
+  #
+  # OPTION A — NATIVE OLLAMA on the host (RECOMMENDED for DGX Spark)
+  #   On NVIDIA GB10, the host's `ollama serve` (systemd) hits ~130 tok/s.
+  #   The same model under Docker drops to ~0.47 tok/s due to GPU passthrough
+  #   overhead with unified memory. Big difference for production inference.
+  #
+  #   To use option A:
+  #     1. Run `ollama serve` on the host (or systemd unit).
+  #     2. Set in .env:   OLLAMA_HOST=http://host.docker.internal:11434
+  #     3. Leave the `ollama:` service block below commented out.
+  #
+  # OPTION B — DOCKER OLLAMA (slower on GB10, but fully containerised)
+  #   To use option B:
+  #     1. In .env, set:  OLLAMA_HOST=http://ollama:11434
+  #     2. Uncomment the `ollama:` service block below.
+  #     3. `docker compose --profile gpu up -d` to start it.
+  #
+  # Default: OPTION A (host Ollama). The api service points at
+  # host.docker.internal via OLLAMA_HOST and `extra_hosts: host-gateway`.
+  #
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: mf-ollama
+  #   profiles: ["gpu"]
+  #   expose:
+  #     - "11434"
+  #   volumes:
+  #     - ollama_models:/root/.ollama
+  #   environment:
+  #     - OLLAMA_HOST=0.0.0.0
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: ["gpu"]
+  #   restart: unless-stopped
 
-  vllm:
-    image: vllm/vllm-openai:latest
-    container_name: mf-vllm
-    profiles: ["gpu"]
-    expose:
-      - "8000"
-    ports:
-      # Browser / Settings UI on LAN (matches VITE_VLLM_HOST host port).
-      - "${VLLM_HOST_PORT:-8001}:8000"
-    command: >
-      --model ${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}
-      --dtype auto
-      --api-key ${VLLM_API_KEY:?VLLM_API_KEY must be set when using the gpu profile}
-      --max-model-len 8192
-    environment:
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
-    volumes:
-      - hf_cache:/root/.cache/huggingface
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: ["gpu"]
-    restart: unless-stopped
+  # ─── vLLM (DISABLED) ────────────────────────────────────────────────
+  #
+  # vLLM is optional — Ollama handles all inference paths used by the app
+  # today (Playground, ForgeAgent, EPT teacher). vLLM is what you'd reach
+  # for if you wanted dedicated high-throughput batched serving or PEFT
+  # adapters loaded as `lora_request`.
+  #
+  # Cost on DGX Spark: vLLM holds ~100GB of unified memory while loaded,
+  # which crowds out training and the 8-member EPT population. Keep it OFF
+  # by default. Uncomment if you specifically need it for serving load.
+  #
+  # vllm:
+  #   image: vllm/vllm-openai:latest
+  #   container_name: mf-vllm
+  #   profiles: ["gpu"]
+  #   expose:
+  #     - "8000"
+  #   ports:
+  #     - "${VLLM_HOST_PORT:-8001}:8000"
+  #   command: >
+  #     --model ${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}
+  #     --dtype auto
+  #     --api-key ${VLLM_API_KEY:?VLLM_API_KEY must be set when using the gpu profile}
+  #     --max-model-len 8192
+  #   environment:
+  #     - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+  #   volumes:
+  #     - hf_cache:/root/.cache/huggingface
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: ["gpu"]
+  #   restart: unless-stopped
 
 volumes:
   postgres_data:

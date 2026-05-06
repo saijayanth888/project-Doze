@@ -93,22 +93,41 @@ def mutate_adapter(
             base_id, torch_dtype=dtype, device_map="auto" if torch.cuda.is_available() else None,
         )
 
+        # Crossover gives us a child adapter; mutation should *continue*
+        # training those LoRA matrices in-place rather than baking them into
+        # the base and starting a fresh adapter. Otherwise the only thing
+        # passed from one generation to the next is the base + (now merged)
+        # crossover, and the new mutation LoRA is independent — defeating
+        # the point of population evolution.
+        #
+        # The conventional way to do this is `is_trainable=True` on
+        # PeftModel.from_pretrained. SFTTrainer's optimiser will then
+        # update the existing LoRA tensors, and save_pretrained writes the
+        # *evolved* adapter (NOT a brand-new one). When there's no seed,
+        # we fall through to a fresh PEFT init via get_peft_model.
+        used_seed = False
         if seed_adapter_path and os.path.isdir(seed_adapter_path):
             try:
-                model = PeftModel.from_pretrained(model, seed_adapter_path)
-                model = model.merge_and_unload()
+                model = PeftModel.from_pretrained(
+                    model, seed_adapter_path, is_trainable=True,
+                )
+                used_seed = True
             except Exception as exc:
-                logger.warning("[mutate] could not load seed adapter: %s — falling back to fresh PEFT init", exc)
+                logger.warning(
+                    "[mutate] could not load seed adapter (%s) — falling back to fresh PEFT init",
+                    exc,
+                )
 
-        lora_cfg = LoraConfig(
-            r=int(lora_rank),
-            lora_alpha=int(lora_alpha),
-            target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-        model = get_peft_model(model, lora_cfg)
+        if not used_seed:
+            lora_cfg = LoraConfig(
+                r=int(lora_rank),
+                lora_alpha=int(lora_alpha),
+                target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+                lora_dropout=0.05,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+            model = get_peft_model(model, lora_cfg)
 
         # Build dataset — small, tokenised at SFTTrainer time.
         ds = Dataset.from_list([{"text": _format_sample(ex)} for ex in samples])
