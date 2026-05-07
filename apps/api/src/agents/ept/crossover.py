@@ -39,6 +39,8 @@ class CrossoverStrategy(str, Enum):
     UNIFORM = "uniform"
     LAYER_WISE = "layer_wise"
     RANDOM_SWAP = "random_swap"
+    TIES = "ties"
+    DARE = "dare"
 
 
 def _load_adapter_weights(path: str) -> dict | None:
@@ -57,6 +59,59 @@ def _load_adapter_weights(path: str) -> dict | None:
     except Exception as exc:
         logger.error("[crossover] load_adapter_weights(%s) failed: %s", path, exc)
         return None
+
+
+def _merge_weights(
+    weights_a: dict,
+    weights_b: dict,
+    *,
+    alpha: float,
+    strategy: "CrossoverStrategy",
+    density: float = 0.5,
+    rng_seed: int | None = None,
+) -> dict:
+    """Pure-tensor merge used by both TIES and DARE branches.
+
+    Pulled out of ``crossover`` so the math is unit-testable
+    without needing real adapter files on disk.
+    """
+    import torch
+
+    common = set(weights_a.keys()) & set(weights_b.keys())
+    out: dict = {}
+
+    if rng_seed is not None:
+        torch.manual_seed(rng_seed)
+
+    if strategy == CrossoverStrategy.TIES:
+        for key in common:
+            wa, wb = weights_a[key], weights_b[key]
+            # 1. Trim — keep only the top-`density` fraction by magnitude.
+            ka = torch.quantile(wa.abs().float(), max(0.0, 1.0 - density))
+            kb = torch.quantile(wb.abs().float(), max(0.0, 1.0 - density))
+            wa_t = torch.where(wa.abs() >= ka, wa, torch.zeros_like(wa))
+            wb_t = torch.where(wb.abs() >= kb, wb, torch.zeros_like(wb))
+            # 2. Elect sign — majority vote weighted by magnitude sum.
+            sign = torch.sign(wa_t + wb_t)
+            # 3. Merge — keep magnitudes whose sign matches the elected sign.
+            mag_a = torch.where(torch.sign(wa_t) == sign, wa_t.abs(), torch.zeros_like(wa_t))
+            mag_b = torch.where(torch.sign(wb_t) == sign, wb_t.abs(), torch.zeros_like(wb_t))
+            merged = (alpha * mag_a + (1.0 - alpha) * mag_b) * sign
+            out[key] = merged.to(wa.dtype)
+        return out
+
+    if strategy == CrossoverStrategy.DARE:
+        d = max(1e-6, density)
+        for key in common:
+            wa, wb = weights_a[key], weights_b[key]
+            mask_a = (torch.rand_like(wa.float()) < d).to(wa.dtype)
+            mask_b = (torch.rand_like(wb.float()) < d).to(wb.dtype)
+            wa_d = wa * mask_a / d
+            wb_d = wb * mask_b / d
+            out[key] = (alpha * wa_d + (1.0 - alpha) * wb_d).to(wa.dtype)
+        return out
+
+    raise ValueError(f"_merge_weights does not handle strategy={strategy!r}")
 
 
 def _save_adapter_weights(weights: dict, child_path: str, config_source: str) -> None:
@@ -100,6 +155,7 @@ def crossover(
     strategy: CrossoverStrategy | str = CrossoverStrategy.UNIFORM,
     seed: int | None = None,
     child_id: str | None = None,
+    **kwargs: Any,
 ) -> str:
     """Breed two LoRA adapters. Returns the child's directory path."""
     import torch
@@ -137,6 +193,7 @@ def crossover(
         common_keys = keys_a
 
     child_weights: dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
     if strategy == CrossoverStrategy.UNIFORM:
         for k in common_keys:
             child_weights[k] = alpha * weights_a[k] + (1.0 - alpha) * weights_b[k]
@@ -158,9 +215,19 @@ def crossover(
                 weights_a[k].clone() if torch.rand(1).item() < alpha else weights_b[k].clone()
             )
 
+    elif strategy in (CrossoverStrategy.TIES, CrossoverStrategy.DARE):
+        density = float(kwargs.get("density", 0.53 if strategy == CrossoverStrategy.DARE else 0.5))
+        child_weights = _merge_weights(
+            {k: weights_a[k] for k in common_keys},
+            {k: weights_b[k] for k in common_keys},
+            alpha=alpha, strategy=strategy, density=density,
+            rng_seed=kwargs.get("rng_seed"),
+        )
+        metadata["density"] = density
+
     _save_adapter_weights(child_weights, child_path, parent_a_path)
 
-    metadata = {
+    metadata.update({
         "child_id": cid,
         "parent_a": parent_a_path,
         "parent_b": parent_b_path,
@@ -169,7 +236,7 @@ def crossover(
         "seed": seed,
         "num_keys": len(child_weights),
         "kind": "ept_crossover",
-    }
+    })
     with open(os.path.join(child_path, "crossover_metadata.json"), "w") as fh:
         json.dump(metadata, fh, indent=2)
 
