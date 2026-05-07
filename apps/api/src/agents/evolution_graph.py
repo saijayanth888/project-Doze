@@ -680,8 +680,15 @@ def build_graph(
         if state["decision"] == "promote":
             state["champion_avg"] = _avg(state.get("child_scores", {}))
             state["champion_path"] = state.get("adapter_path")
-            state["parent_scores"] = dict(state.get("child_scores", {}))
+        # Advance parent_scores AFTER persistence: the runner's
+        # on_state_change reads parent_scores at this _emit to build the
+        # generation row. Advancing first would clobber the per-gen
+        # parent→child delta in the saved record (parent==child for every
+        # promoted gen). Next iteration's compare_to_champion still sees
+        # the new champion as parent because we advance below.
         await _emit(state, "promote_or_discard")
+        if state["decision"] == "promote":
+            state["parent_scores"] = dict(state.get("child_scores", {}))
         return state
 
     # ── Conditional edges ────────────────────────────────────────
