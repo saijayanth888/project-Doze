@@ -21,11 +21,13 @@ import {
 import LiveDot from '../shared/LiveDot';
 import Badge from '../shared/Badge';
 import { useToast } from '../../context/ToastContext';
+import ModelPicker from '../shared/ModelPicker';
 
 const STEPS = ['Evaluate', 'Identify', 'Curate', 'Train', 'Compare', 'Decide', 'Record'];
 const MAX_POINTS = 150;
 const RECENT_OLLAMA_TAGS_KEY = 'modelforge_recent_ollama_tags';
 const MAX_RECENT_OLLAMA_TAGS = 24;
+const LAST_EVOLUTION_MODEL_KEY = 'mf:last-evolution-model';
 
 function tagsFromModelListPayload(data) {
   const list = Array.isArray(data?.models) ? data.models : Array.isArray(data) ? data : [];
@@ -121,6 +123,12 @@ export default function EvolutionStatus() {
   const [ollamaModels, setOllamaModels] = useState([]);
   /** When set, overrides preset `base_model` for `/api/evolve/start`. */
   const [presetBaseTag, setPresetBaseTag] = useState('');
+  /** Single source-of-truth model id for the Start dialog (replaces scattered base_model selects). */
+  const [selectedModel, setSelectedModel] = useState(() => {
+    try { return window.localStorage.getItem(LAST_EVOLUTION_MODEL_KEY) || ''; } catch { return ''; }
+  });
+  /** Latest /api/models/validate response from the ModelPicker onValidate callback. */
+  const [modelValidation, setModelValidation] = useState(null);
   const [ollamaListError, setOllamaListError] = useState(false);
   const wsRef = useRef(null);
   const prevRunningRef = useRef(false);
@@ -307,10 +315,17 @@ export default function EvolutionStatus() {
 
   useEffect(() => {
     if (!modalOpen || tab !== 'custom' || !ollamaModels.length) return;
+    // Keep customCfg.base_model in sync for backward compat (not used as picker source of truth)
     setCustomCfg((c) =>
       ollamaModels.includes(c.base_model) ? c : { ...c, base_model: ollamaModels[0] }
     );
   }, [modalOpen, tab, ollamaModels]);
+
+  // Seed selectedModel from ollamaModels if not already set (first open, no localStorage value)
+  useEffect(() => {
+    if (!modalOpen || selectedModel || !ollamaModels.length) return;
+    setSelectedModel(ollamaModels[0]);
+  }, [modalOpen, ollamaModels, selectedModel]);
 
   // Lazy-fetch the selected preset's full config so the dialog can display
   // a 1-line description + estimated duration before the user commits.
@@ -436,6 +451,17 @@ export default function EvolutionStatus() {
   }, [isRunning, status.run_id, status.generation]);
 
   const handleStartFromModal = async () => {
+    // Guard: warn user when selected model exceeds 110 GB safe limit
+    if (modelValidation && modelValidation.fits_128gb === false) {
+      const gb = typeof modelValidation.estimated_memory_gb === 'number'
+        ? modelValidation.estimated_memory_gb
+        : '?';
+      const ok = window.confirm(
+        `Estimated peak ${gb} GB exceeds 110 GB. Run anyway?`
+      );
+      if (!ok) return;
+    }
+
     setStartError(null);
     try {
       if (tab === 'preset') {
@@ -443,18 +469,26 @@ export default function EvolutionStatus() {
           setStartError('No presets available — use Custom or check API / database.');
           return;
         }
+        // Use selectedModel as the base_model override (single source of truth)
+        const modelOverride = selectedModel.trim() || presetBaseTag.trim();
         await startEvolutionWithPreset(
           selectedPreset,
-          presetBaseTag ? { base_model: presetBaseTag } : {}
+          modelOverride ? { base_model: modelOverride } : {}
         );
       } else {
         const body = { ...customCfg };
+        // Use selectedModel as base_model if set
+        if (selectedModel.trim()) body.base_model = selectedModel.trim();
         if (!body.custom_dataset_id) delete body.custom_dataset_id;
         if (body.max_samples == null) delete body.max_samples;
         await apiFetch('/api/evolve/start', {
           method: 'POST',
           body: JSON.stringify(body),
         });
+      }
+      // Persist the picked model on successful start
+      if (selectedModel.trim()) {
+        try { window.localStorage.setItem(LAST_EVOLUTION_MODEL_KEY, selectedModel.trim()); } catch { /* ignore */ }
       }
       setModalOpen(false);
       setMetrics([]);
@@ -1015,6 +1049,83 @@ export default function EvolutionStatus() {
                 {startError}
               </div>
             ) : null}
+            {/* ── Shared model picker ─────────────────────────────────── */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: C.txtM, fontFamily: F.ui, marginBottom: 6 }}>
+                Base model
+              </div>
+              <ModelPicker
+                value={selectedModel}
+                onChange={(id) => { setSelectedModel(id); setPresetBaseTag(id); }}
+                onValidate={(v) => setModelValidation(v)}
+                showMemoryEstimate
+                showPullButton
+                showPresets
+              />
+              {/* Memory-fit warning strip */}
+              {modelValidation && modelValidation.fits_128gb === false && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    padding: '9px 12px',
+                    background: 'rgba(245,158,11,0.10)',
+                    border: '1px solid rgba(245,158,11,0.35)',
+                    borderRadius: 8,
+                    fontSize: 12,
+                    color: '#f59e0b',
+                    fontFamily: F.ui,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <span style={{ flexShrink: 0 }}>⚠</span>
+                  <span>
+                    Estimated peak{' '}
+                    {typeof modelValidation.estimated_memory_gb === 'number'
+                      ? `${modelValidation.estimated_memory_gb.toFixed(1)} GB`
+                      : '?'}{' '}
+                    exceeds the 110 GB safe limit on this box.{' '}
+                    Reduce LoRA rank or batch size, or pick a smaller model.
+                  </span>
+                </div>
+              )}
+              {/* Gated-model nudge */}
+              {modelValidation && modelValidation.gated === true && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    padding: '9px 12px',
+                    background: 'rgba(245,158,11,0.07)',
+                    border: '1px solid rgba(245,158,11,0.25)',
+                    borderRadius: 8,
+                    fontSize: 12,
+                    color: C.txtS,
+                    fontFamily: F.ui,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <span style={{ flexShrink: 0 }}>🔒</span>
+                  <span>
+                    Gated by HuggingFace — accept the license at{' '}
+                    <a
+                      href={`https://huggingface.co/${modelValidation.model_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: '#f59e0b', textDecoration: 'underline' }}
+                    >
+                      huggingface.co/{modelValidation.model_id}
+                    </a>{' '}
+                    then ensure <code style={{ fontFamily: F.mono, fontSize: 11 }}>HF_TOKEN</code>{' '}
+                    is set in <code style={{ fontFamily: F.mono, fontSize: 11 }}>.env</code>.
+                  </span>
+                </div>
+              )}
+            </div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
               {['preset', 'custom'].map((t) => (
                 <button
@@ -1135,188 +1246,9 @@ export default function EvolutionStatus() {
                     </div>
                   );
                 })()}
-                <label style={{ display: 'block' }}>
-                  <span style={{ fontSize: 11, color: C.txtM, fontFamily: F.ui }}>
-                    Base Ollama model (optional)
-                  </span>
-                  <div style={{ marginTop: 6, display: 'flex', gap: 8, alignItems: 'center' }}>
-                    {ollamaModels.length ? (
-                      <select
-                        value={presetBaseTag}
-                        onChange={(e) => setPresetBaseTag(e.target.value)}
-                        style={{
-                          flex: 1,
-                          width: '100%',
-                          padding: '8px 10px',
-                          background: C.bgI,
-                          border: `1px solid ${C.border}`,
-                          borderRadius: 6,
-                          color: C.txtP,
-                          fontFamily: F.mono,
-                          fontSize: 12,
-                        }}
-                      >
-                        <option value="">Use preset default</option>
-                        {ollamaModels.map((t) => (
-                          <option key={t} value={t}>
-                            {t}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        value={presetBaseTag}
-                        onChange={(e) => setPresetBaseTag(e.target.value)}
-                        placeholder="e.g. llama3.2:3b"
-                        style={{
-                          flex: 1,
-                          width: '100%',
-                          padding: '8px 10px',
-                          background: C.bgI,
-                          border: `1px solid ${C.border}`,
-                          borderRadius: 6,
-                          color: C.txtP,
-                          fontFamily: F.mono,
-                          fontSize: 12,
-                        }}
-                      />
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const tag = window.prompt('Enter Ollama model tag (e.g. llama3.2:3b)');
-                        if (tag) pullModel(tag);
-                      }}
-                      style={{
-                        padding: '8px 10px',
-                        borderRadius: 6,
-                        border: `1px solid ${C.border}`,
-                        background: C.bgE,
-                        color: C.txtS,
-                        cursor: 'pointer',
-                        fontFamily: F.ui,
-                        fontSize: 12,
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      Pull Model
-                    </button>
-                  </div>
-                  {!ollamaModels.length ? (
-                    <p style={{ fontSize: 10, color: C.txtM, fontFamily: F.ui, margin: '8px 0 0 0', lineHeight: 1.45 }}>
-                      {ollamaListError
-                        ? 'API could not list Ollama tags — if Ollama runs on this machine, ensure it listens on 0.0.0.0:11434 and the API container uses OLLAMA_HOST=http://host.docker.internal:11434 (see docker-compose / .env).'
-                        : 'No models listed yet — type a tag, pull one, or open the modal again after the API can reach Ollama.'}
-                    </p>
-                  ) : null}
-                </label>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <label style={{ fontSize: 11, color: C.txtM, fontFamily: F.ui }}>
-                  Base Ollama model
-                  {ollamaModels.length > 0 ? (
-                    <div style={{ marginTop: 4, display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <select
-                        value={customCfg.base_model}
-                        onChange={(e) =>
-                          setCustomCfg((c) => ({ ...c, base_model: e.target.value }))
-                        }
-                        style={{
-                          flex: 1,
-                          width: '100%',
-                          padding: '8px 10px',
-                          background: C.bgI,
-                          border: `1px solid ${C.border}`,
-                          borderRadius: 6,
-                          color: C.txtP,
-                          fontFamily: F.mono,
-                          fontSize: 12,
-                        }}
-                      >
-                        {customCfg.base_model &&
-                        !ollamaModels.includes(customCfg.base_model) ? (
-                          <option value={customCfg.base_model}>
-                            {customCfg.base_model} (manual)
-                          </option>
-                        ) : null}
-                        {ollamaModels.map((t) => (
-                          <option key={t} value={t}>
-                            {t}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const tag = window.prompt('Enter Ollama model tag (e.g. llama3.2:3b)');
-                          if (tag) pullModel(tag);
-                        }}
-                        style={{
-                          padding: '8px 10px',
-                          borderRadius: 6,
-                          border: `1px solid ${C.border}`,
-                          background: C.bgE,
-                          color: C.txtS,
-                          cursor: 'pointer',
-                          fontFamily: F.ui,
-                          fontSize: 12,
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        Pull Model
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <input
-                        type="text"
-                        value={customCfg.base_model ?? ''}
-                        onChange={(e) =>
-                          setCustomCfg((c) => ({ ...c, base_model: e.target.value }))
-                        }
-                        placeholder="e.g. llama3.2:3b"
-                        style={{
-                          marginTop: 4,
-                          width: '100%',
-                          padding: '8px 10px',
-                          background: C.bgI,
-                          border: `1px solid ${C.border}`,
-                          borderRadius: 6,
-                          color: C.txtP,
-                          fontFamily: F.mono,
-                          fontSize: 12,
-                        }}
-                      />
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const tag = window.prompt('Enter Ollama model tag (e.g. llama3.2:3b)');
-                            if (tag) pullModel(tag);
-                          }}
-                          style={{
-                            padding: '8px 10px',
-                            borderRadius: 6,
-                            border: `1px solid ${C.border}`,
-                            background: C.bgE,
-                            color: C.txtS,
-                            cursor: 'pointer',
-                            fontFamily: F.ui,
-                            fontSize: 12,
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          Pull Model
-                        </button>
-                      </div>
-                      <p style={{ fontSize: 10, color: C.txtM, fontFamily: F.ui, margin: '8px 0 0 0', lineHeight: 1.45 }}>
-                        No models from Ollama yet — you can type one manually, or pull a new one.
-                      </p>
-                    </>
-                  )}
-                </label>
                 {[
                   ['max_generations', 'Max generations', 'number'],
                   ['lora_rank', 'LoRA rank', 'number'],

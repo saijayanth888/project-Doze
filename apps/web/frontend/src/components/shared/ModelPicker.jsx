@@ -36,6 +36,7 @@ function saveRecent(modelId) {
 export default function ModelPicker({
   value = '',
   onChange,
+  onValidate,
   showMemoryEstimate = true,
   showPullButton = true,
   showPresets = true,
@@ -111,8 +112,8 @@ export default function ModelPicker({
       method: 'POST',
       body: JSON.stringify({ model_id: modelId.trim() }),
     })
-      .then((data) => setValidation(data))
-      .catch(() => setValidation({ valid: false, model_id: modelId, reason: 'error' }))
+      .then((data) => { setValidation(data); onValidate?.(data); })
+      .catch(() => { const err = { valid: false, model_id: modelId, reason: 'error' }; setValidation(err); onValidate?.(err); })
       .finally(() => setValidating(false));
   }, [localModels]);
 
