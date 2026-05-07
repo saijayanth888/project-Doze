@@ -19,6 +19,7 @@ export default function TopBar({ champion = null }) {
   const [apiLive, setApiLive] = useState(null);
   const [gpuUtil, setGpuUtil] = useState(null);
   const [evolve, setEvolve] = useState(null);
+  const [campaign, setCampaign] = useState(null);
 
   useEffect(() => {
     const check = async () => {
@@ -56,6 +57,21 @@ export default function TopBar({ champion = null }) {
       }
     };
     poll();
+    const iv = setInterval(poll, 5000);
+    return () => clearInterval(iv);
+  }, []);
+
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const s = await apiFetch('/api/campaigns/status');
+        setCampaign(s);
+      } catch {
+        setCampaign(null);
+      }
+    };
+    poll();
+    // Cheap poll — same cadence as evolve so the badge stays in sync.
     const iv = setInterval(poll, 5000);
     return () => clearInterval(iv);
   }, []);
@@ -225,6 +241,37 @@ export default function TopBar({ champion = null }) {
               ? `Gen ${evolve.generation ?? '?'} running…`
               : 'idle'}
           </span>
+          {campaign && campaign.status && campaign.status !== 'idle' ? (
+            <Link
+              to="/campaign"
+              title={
+                campaign.status === 'paused'   ? 'Campaign paused'
+                : campaign.status === 'stopping' ? 'Campaign stopping'
+                : 'Campaign running — click to open'
+              }
+              style={{
+                marginLeft: 8,
+                padding: '2px 8px',
+                fontFamily: F.mono,
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: 0.4,
+                textDecoration: 'none',
+                color: campaign.status === 'paused' ? '#fbbf24'
+                     : campaign.status === 'stopping' ? '#f97316'
+                     : '#4ade80',
+                background: campaign.status === 'paused' ? '#fbbf2422'
+                          : campaign.status === 'stopping' ? '#f9731622'
+                          : '#4ade8022',
+                border: `1px solid ${campaign.status === 'paused' ? '#fbbf2466'
+                                    : campaign.status === 'stopping' ? '#f9731666'
+                                    : '#4ade8066'}`,
+                borderRadius: 4,
+              }}
+            >
+              CAMPAIGN {Math.min((campaign.current_experiment ?? 0) + 1, campaign.total_experiments || 1)}/{campaign.total_experiments || '?'}
+            </Link>
+          ) : null}
         </div>
 
         {/* API status */}

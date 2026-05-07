@@ -219,7 +219,11 @@ class CampaignRunner:
             }
 
         if method == "ept":
-            from agents.ept.runner import EPTRunner
+            # Use the same start_runner() entry point /api/ept/start uses so
+            # that /api/ept/status, /population, /history, and the EPT page
+            # all see the run while it's in flight. Constructing EPTRunner
+            # directly bypasses attach_runner() and leaves the dashboard blind.
+            from agents.ept.runner import get_runner, start_runner
 
             cfg = {
                 "base_model": model,
@@ -232,12 +236,46 @@ class CampaignRunner:
                 if k not in ("model", "base_model", "method", "name", "crossover",
                              "population_size", "max_generations", "mutation_steps"):
                     cfg[k] = v
-            ept = EPTRunner(cfg)
             t0 = time.perf_counter()
-            await ept.run()
+            ept = start_runner(cfg)
+
+            # Poll the singleton until it finishes. Cancel on stop.
+            deadline = time.monotonic() + _EXPERIMENT_TIMEOUT_SECONDS
+            while time.monotonic() < deadline:
+                if not ept.status.get("is_running"):
+                    break
+                if self.status == "stopping":
+                    try:
+                        ept.request_stop()
+                    except Exception:
+                        pass
+                    # Give it a few seconds to wind down gracefully.
+                    for _ in range(10):
+                        if not ept.status.get("is_running"):
+                            break
+                        await asyncio.sleep(1)
+                    break
+                while self.status == "paused":
+                    await asyncio.sleep(2)
+                await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+            if ept.status.get("is_running"):
+                try:
+                    ept.request_stop()
+                except Exception:
+                    pass
+                raise TimeoutError(
+                    f"EPT experiment timed out after {_EXPERIMENT_TIMEOUT_SECONDS}s"
+                )
+
+            err = ept.status.get("error")
+            if err:
+                raise RuntimeError(f"EPT runner reported error: {err}")
+
             champion = None
             try:
-                champion = ept.manager.get_champion()  # type: ignore[attr-defined]
+                # Read champion from the same singleton other endpoints see.
+                live = get_runner() or ept
+                champion = live.manager.get_champion()  # type: ignore[attr-defined]
             except Exception:
                 champion = None
             scores: dict[str, float] = {}
