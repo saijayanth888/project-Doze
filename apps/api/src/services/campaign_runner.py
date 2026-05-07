@@ -184,6 +184,17 @@ class CampaignRunner:
                     "✅",
                 )
             except Exception as exc:  # noqa: BLE001 — fault-tolerant runner
+                # Cooperative stop: don't retry, mark stopped, exit the loop.
+                from agents.eval_backend import EvalStopped
+                if isinstance(exc, EvalStopped) or self.status == "stopping":
+                    logger.info("[campaign] exp %d stopped by user request", idx + 1)
+                    self.results.append({"index": idx, "status": "stopped"})
+                    await self._db_finish_result(db, idx, status="failed", error="stopped by user")
+                    await self._notify(
+                        f"Experiment {idx + 1}/{total} stopped by user", "🛑",
+                    )
+                    await self._cleanup_gpu()
+                    break
                 logger.exception("[campaign] exp %d failed: %s", idx + 1, exc)
                 await self._cleanup_gpu()
                 # Retry once.
@@ -251,6 +262,7 @@ class CampaignRunner:
                 adapter_path=None,
                 config={"base_model": model, **{k: v for k, v in exp.items()
                         if k in ("eval_limit", "limit")}},
+                should_stop=lambda: self.status == "stopping",
             )
             scores = dict(result.scores or {})
             avg = sum(scores.values()) / len(scores) if scores else 0.0

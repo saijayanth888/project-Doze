@@ -12,6 +12,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from typing import Protocol
 
 logger = logging.getLogger("modelforge.agents.eval")
@@ -99,6 +100,15 @@ class EvalResult:
     stderrs: dict[str, float] = field(default_factory=dict)
 
 
+class EvalStopped(Exception):
+    """Raised when ``should_stop()`` returns True between benchmarks.
+
+    Lets the campaign / evolve runner abort an in-flight evaluation without
+    waiting for the full multi-benchmark sweep to finish — Stop in the UI
+    engages at the next benchmark boundary instead of after the full eval.
+    """
+
+
 class EvalBackend(Protocol):
     name: str
 
@@ -109,6 +119,7 @@ class EvalBackend(Protocol):
         generation: int,
         adapter_path: str | None,
         config: dict | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> EvalResult: ...
 
 
@@ -126,8 +137,11 @@ class MockEvalBackend:
         generation: int,
         adapter_path: str | None,
         config: dict | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> EvalResult:
         await asyncio.sleep(self._sleep_s)
+        if should_stop and should_stop():
+            raise EvalStopped("mock eval stopped by user")
 
         promoted = generation in _PROMOTED_GENS
         scores: dict[str, float] = {}
@@ -204,6 +218,7 @@ class LMEvalHarnessBackend:
         generation: int,
         adapter_path: str | None,
         config: dict | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> EvalResult:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
@@ -213,6 +228,7 @@ class LMEvalHarnessBackend:
             generation,
             adapter_path,
             config,
+            should_stop,
         )
 
     def _evaluate_sync(
@@ -221,6 +237,7 @@ class LMEvalHarnessBackend:
         generation: int,
         adapter_path: str | None,
         config: dict | None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> EvalResult:
         import inspect as _inspect
 
@@ -274,6 +291,13 @@ class LMEvalHarnessBackend:
         )
 
         for bench in bench_names:
+            # Cooperative stop: the campaign runner flips a flag when the user
+            # clicks Stop in the UI. Check at each benchmark boundary so we
+            # bail out without waiting for the full multi-benchmark sweep.
+            if should_stop and should_stop():
+                logger.info("[lm-eval] run=%s aborting at bench=%s — stop requested", run_id, bench)
+                raise EvalStopped(f"stopped before {bench}")
+
             cfg = _TASK_CONFIG.get(bench)
             if not cfg:
                 logger.warning("[lm-eval] unknown benchmark: %s", bench)

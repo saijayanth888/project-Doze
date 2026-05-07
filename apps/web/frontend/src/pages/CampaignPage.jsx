@@ -703,7 +703,7 @@ export default function CampaignPage() {
   const handleStop = useCallback(async () => {
     try {
       await apiFetch('/api/campaigns/stop', { method: 'POST' });
-      toast.show('Stopping — will finish the current experiment then exit.', 'success');
+      toast.show('Stopping — will exit at the next benchmark boundary (usually 1–10 min).', 'success');
       pollStatus();
     } catch (err) {
       toast.show(`Failed to stop: ${err.message}`, 'danger');
