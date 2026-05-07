@@ -29,6 +29,8 @@ import {
 import { C, F } from '../config/colors';
 import { apiFetch } from '../config/api';
 import LoadingSkeleton from '../components/shared/LoadingSkeleton';
+import InfoTooltip from '../components/shared/InfoTooltip';
+import { AUTOMATION_INFO } from '../data/automationInfo';
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -533,15 +535,21 @@ function WorkflowEditor({ workflow, onChange, onSave, onDelete, onTrigger, schem
       <div style={{ background: C.bgC, border: `1px solid ${C.border}`, borderRadius: 8, padding: 14 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <input
-              value={workflow.name}
-              disabled={isSystem}
-              onChange={(e) => onChange({ ...workflow, name: e.target.value })}
-              style={{
-                ...input({ fontFamily: F.display, fontSize: 22, padding: '4px 0',
-                          background: 'transparent', border: 'none', color: C.txtP }),
-              }}
-            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <input
+                value={workflow.name}
+                disabled={isSystem}
+                onChange={(e) => onChange({ ...workflow, name: e.target.value })}
+                style={{
+                  ...input({ fontFamily: F.display, fontSize: 22, padding: '4px 0',
+                            background: 'transparent', border: 'none', color: C.txtP }),
+                  flex: 1, minWidth: 0,
+                }}
+              />
+              {AUTOMATION_INFO[workflow.name] ? (
+                <InfoTooltip info={AUTOMATION_INFO[workflow.name]} size={13} />
+              ) : null}
+            </div>
             <input
               value={workflow.description || ''}
               onChange={(e) => onChange({ ...workflow, description: e.target.value })}
@@ -925,10 +933,26 @@ function WorkflowListItem({ wf, selected, onPick }) {
         {wf.last_run_at ? (
           <>
             <Last size={10} color={tone.fg} />
-            <span style={{ color: tone.fg }}>{fmtAgo(wf.last_run_at)}</span>
+            <span style={{ color: tone.fg }}>
+              {fmtAgo(wf.last_run_at)} · {tone.label}
+            </span>
           </>
         ) : null}
       </div>
+      {wf.description ? (
+        <div
+          style={{
+            fontFamily: F.ui,
+            fontSize: 10,
+            color: C.txtM,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {wf.description}
+        </div>
+      ) : null}
     </button>
   );
 }
@@ -1071,6 +1095,13 @@ export default function AutomationPage() {
   }
   async function triggerSelected() {
     if (!draft?.id) return;
+    const info = AUTOMATION_INFO[draft.name];
+    if (info?.destructive === true) {
+      const ok = window.confirm(
+        `Run "${draft.name}" now?\n\n${info.side_effects}\n\nProceed?`
+      );
+      if (!ok) return;
+    }
     setBusy(true);
     try {
       await apiFetch(`/api/automation/workflows/${draft.id}/trigger`, { method: 'POST', body: '{}' });
@@ -1112,6 +1143,22 @@ export default function AutomationPage() {
             Trigger → condition → actions. Cron, event, or webhook. Slack out today; Discord & email when we go production-ready.
           </p>
         </div>
+      </div>
+
+      {/* Top-of-page banner */}
+      <div
+        style={{
+          background: 'rgba(129,140,248,0.07)',
+          border: `1px solid ${C.border}`,
+          borderRadius: 8,
+          padding: '10px 14px',
+          fontFamily: F.ui,
+          fontSize: 12.5,
+          color: C.txtS,
+          lineHeight: 1.5,
+        }}
+      >
+        Seven in-process automation workflows run on cron schedules and trigger Slack notifications. Toggle a workflow off to disable it; click Run now to fire immediately. Configure the Slack webhook in the Slack panel below.
       </div>
 
       {/* Three-column workspace */}
