@@ -111,23 +111,61 @@ function ActiveCampaignBanner({ status, onPause, onResume, onStop, onForceStop, 
     failed = 0,
     results = [],
     ensure_progress: ensureProgress = [],
+    current_benchmarks: currentBenchmarks = [],
+    current_elapsed_seconds: currentElapsedSeconds,
   } = status;
 
   const done = completed + failed;
-  const progress = total_experiments > 0 ? done / total_experiments : 0;
 
-  // ETA calc
+  // Within-experiment fraction from the benchmark ladder so the bar isn't
+  // stuck at 0% for the first ~hour while experiment 1 grinds through 5
+  // benchmarks. "done" + "error" both count as finished work; "running"
+  // half-counts so the bar moves smoothly between bench boundaries.
+  let inFlightFraction = 0;
+  if (Array.isArray(currentBenchmarks) && currentBenchmarks.length > 0) {
+    const totalB = currentBenchmarks.length;
+    const finishedB = currentBenchmarks.filter(
+      (b) => b.status === 'done' || b.status === 'error',
+    ).length;
+    const runningB = currentBenchmarks.filter((b) => b.status === 'running').length;
+    inFlightFraction = (finishedB + runningB * 0.5) / totalB;
+  }
+  const progress =
+    total_experiments > 0
+      ? Math.min(1, (done + inFlightFraction) / total_experiments)
+      : 0;
+
+  // ETA calc — prefer pace from completed experiments. Once one is done we
+  // have a real number; before that, fall back to extrapolating from the
+  // active experiment's elapsed time over its bench-ladder fraction so the
+  // first card doesn't sit at "ETA: pending first experiment" for an hour.
   const withDuration = results.filter(
     (r) => r.status === 'completed' && r.duration_seconds != null,
   );
   let etaLabel = 'ETA: pending first experiment';
   if (withDuration.length > 0) {
-    const avg = withDuration.reduce((s, r) => s + r.duration_seconds, 0) / withDuration.length;
+    const avg =
+      withDuration.reduce((s, r) => s + r.duration_seconds, 0) / withDuration.length;
     const remaining = total_experiments - done;
     const totalSec = avg * remaining;
     const hours = Math.floor(totalSec / 3600);
     const mins = Math.floor((totalSec % 3600) / 60);
     etaLabel = `~${hours}h ${mins}m remaining`;
+  } else if (
+    inFlightFraction > 0.05 &&
+    Number.isFinite(Number(currentElapsedSeconds)) &&
+    currentElapsedSeconds > 0
+  ) {
+    // Project current experiment's full duration from its current pace,
+    // then assume similar pace for remaining experiments.
+    const projectedExp = currentElapsedSeconds / inFlightFraction;
+    const remaining = Math.max(0, total_experiments - done) - inFlightFraction;
+    const totalSec = projectedExp * remaining + (1 - inFlightFraction) * projectedExp;
+    if (totalSec > 0 && Number.isFinite(totalSec)) {
+      const hours = Math.floor(totalSec / 3600);
+      const mins = Math.floor((totalSec % 3600) / 60);
+      etaLabel = `~${hours}h ${mins}m remaining (estimate)`;
+    }
   }
 
   const isRunning = st === 'running';
