@@ -23,31 +23,62 @@ def _engine_or_503():
 
 
 @router.get("/jobs")
-async def list_jobs() -> dict[str, Any]:
-    eng = _engine_or_503()
-    return {"jobs": await eng.list_jobs()}
+async def list_jobs(db: LineageDB = Depends(get_db)) -> dict[str, Any]:
+    """Return seeded + user-saved jobs straight from automation_jobs.
+
+    The DB row is the source of truth; the engine doesn't keep a
+    parallel in-memory job list (an earlier eng.list_jobs() helper was
+    removed when the engine moved to a workflow model).
+    """
+    rows = await db.list_automation_jobs()
+    return {"jobs": rows or []}
 
 
 @router.put("/jobs/{job_id}")
-async def update_job(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
+async def update_job(
+    job_id: str,
+    body: dict[str, Any],
+    db: LineageDB = Depends(get_db),
+) -> dict[str, Any]:
     """Enable/disable, retime, or reconfigure a job in one call."""
-    eng = _engine_or_503()
-    saved = await eng.update_job(
-        job_id,
-        enabled=body.get("enabled"),
-        cron=body.get("cron"),
-        config=body.get("config"),
+    existing = await db.get_automation_job(job_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"Unknown job '{job_id}'")
+    enabled = body.get("enabled")
+    cron = body.get("cron")
+    config = body.get("config")
+    saved = await db.upsert_automation_job(
+        job_id=job_id,
+        name=existing.get("name") or job_id,
+        cron=cron if cron is not None else (existing.get("cron") or ""),
+        enabled=bool(enabled if enabled is not None else existing.get("enabled", True)),
+        config=config if config is not None else (existing.get("config") or {}),
     )
     if saved is None:
-        raise HTTPException(status_code=404, detail=f"Unknown job '{job_id}'")
+        raise HTTPException(status_code=500, detail=f"Failed to update job '{job_id}'")
     return saved
 
 
 @router.post("/jobs/{job_id}/trigger")
-async def trigger_job(job_id: str) -> dict[str, Any]:
-    eng = _engine_or_503()
-    ok = await eng.trigger(job_id)
-    if not ok:
+async def trigger_job(job_id: str, db: LineageDB = Depends(get_db)) -> dict[str, Any]:
+    """Best-effort engine trigger. Records an execution-log row either way."""
+    eng = automation_module.get_engine()
+    fired = False
+    if eng is not None:
+        try:
+            await eng.trigger_workflow(job_id, payload=None)
+            fired = True
+        except Exception as exc:
+            logger.info("[automation] engine trigger %s failed: %s", job_id, exc)
+    try:
+        await db.record_automation_run(
+            job_id=job_id,
+            status="queued" if fired else "no_handler",
+            message=("queued via engine" if fired else "no engine handler registered"),
+        )
+    except Exception as exc:
+        logger.debug("[automation] record_automation_run failed: %s", exc)
+    if not fired:
         raise HTTPException(status_code=404, detail=f"No handler for '{job_id}'")
     return {"status": "queued", "job_id": job_id}
 

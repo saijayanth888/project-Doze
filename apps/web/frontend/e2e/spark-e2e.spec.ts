@@ -7,7 +7,7 @@ const API_BASE =
   process.env.PLAYWRIGHT_BASE_URL ||
   process.env.API_URL ||
   `http://${SPARK_IP}:3001`;
-const N8N_BASE = process.env.N8N_URL || `http://${SPARK_IP}:5679`;
+// n8n was removed; the in-process AutomationEngine replaces it.
 
 const apiHeaders = API_KEY ? { "X-API-Key": API_KEY } : {};
 
@@ -60,10 +60,15 @@ test.describe("API endpoints", () => {
 
   test("inference via Ollama works", async ({ request }) => {
     test.skip(!API_KEY, "MODELFORGE_API_KEY required for authenticated infer");
+    // First inference after a fresh container loads the model into VRAM —
+    // can take 30+s on cold cache. Default Playwright request timeout is
+    // 30s which races with the cold load. Give it 90s explicitly.
+    test.setTimeout(120_000);
     // Trailing slash avoids a 307 to a Location that must preserve Host:port (see infra/nginx.conf).
     const res = await request.post(`${API_BASE}/api/infer/`, {
       headers: { ...apiHeaders, "Content-Type": "application/json" },
       data: { prompt: "Say hello in exactly 3 words", max_tokens: 20 },
+      timeout: 90_000,
     });
     expect(res.status()).toBe(200);
     const body = await res.json();
@@ -115,15 +120,7 @@ test.describe("Frontend pages", () => {
   });
 });
 
-test.describe("n8n workflows", () => {
-  test("n8n healthz responds when reachable", async ({ request }) => {
-    const res = await request.get(`${N8N_BASE}/healthz`);
-    if (!res.ok()) {
-      test.skip(true, `n8n not reachable at ${N8N_BASE}`);
-    }
-    expect(res.status()).toBe(200);
-  });
-});
+// n8n removed — automation runs in-process via services/automation_engine.
 
 test.describe("Evolution run", () => {
   test("can start an evolution run", async ({ request }) => {
