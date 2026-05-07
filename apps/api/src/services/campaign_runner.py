@@ -47,10 +47,13 @@ class CampaignRunner:
     # ── Public lifecycle ────────────────────────────────────────
 
     async def start(self, plan_id: str, experiments: list[dict], db) -> dict:
-        if self.status == "running":
+        if self.status in ("running", "ensuring"):
             raise ValueError("a campaign is already running")
         self.active_plan_id = plan_id
-        self.status = "running"
+        # Mark "ensuring" so the UI shows the pre-flight phase before any
+        # experiment kicks off; the runner flips to "running" once downloads
+        # complete.
+        self.status = "ensuring"
         self.current_experiment_index = 0
         self.results = []
         self._experiments = list(experiments)
@@ -86,7 +89,7 @@ class CampaignRunner:
             self.status = "running"
 
     def stop(self) -> None:
-        if self.status in ("running", "paused"):
+        if self.status in ("running", "paused", "ensuring"):
             self.status = "stopping"
 
     def get_status(self) -> dict:
@@ -107,6 +110,33 @@ class CampaignRunner:
 
     async def _run_campaign(self, experiments: list[dict], db) -> None:
         total = len(experiments)
+
+        # Pre-flight: ensure every referenced HF repo is cached locally so the
+        # campaign can run end-to-end without anyone running `huggingface-cli
+        # download` by hand. Failures here abort the campaign cleanly.
+        try:
+            from services.model_ensure import ensure_all_for_experiments
+            await ensure_all_for_experiments(experiments, notify=self._notify)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[campaign] pre-flight model download failed: %s", exc)
+            await self._notify(
+                f"Campaign aborted before start — model download failed: {exc}",
+                "🔴",
+            )
+            plan_id = self.active_plan_id
+            self.status = "idle"
+            if db and getattr(db, "_pool", None) and plan_id:
+                async with db._pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE campaign_plans SET status = $1, completed_at = NOW() WHERE plan_id = $2",
+                        "failed", plan_id,
+                    )
+            return
+
+        # Pre-flight done — flip into the executing phase.
+        if self.status == "ensuring":
+            self.status = "running"
+
         for idx, exp in enumerate(experiments):
             if self.status == "stopping":
                 logger.info("[campaign] stopped at experiment %d/%d", idx + 1, total)

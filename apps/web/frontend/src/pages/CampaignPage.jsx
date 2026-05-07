@@ -35,9 +35,11 @@ function ExperimentRow({ exp }) {
           color: C.txtP,
         }}
       >
-        {exp.model_id || exp.base_model || '—'}
+        {exp.model || exp.model_id || exp.base_model || '—'}
       </span>
-      <span style={{ color: C.txtM }}>{exp.method || '—'}</span>
+      <span style={{ color: C.txtM }}>
+        {exp.method || (exp.eval_only ? 'baseline' : 'sequential')}
+      </span>
       <span style={{ color: C.txtM, textAlign: 'right' }}>
         {exp.max_generations != null ? `${exp.max_generations} gen` : '—'}
       </span>
@@ -48,6 +50,7 @@ function ExperimentRow({ exp }) {
 // ---- Status badge helpers ----
 const STATUS_COLORS = {
   running:   { bg: 'rgba(34,197,94,0.15)',  text: '#22c55e', dot: '#22c55e'  },
+  ensuring:  { bg: 'rgba(56,189,248,0.15)', text: '#38bdf8', dot: '#38bdf8'  },
   paused:    { bg: 'rgba(234,179,8,0.15)',  text: '#eab308', dot: '#eab308'  },
   stopping:  { bg: 'rgba(249,115,22,0.15)', text: '#f97316', dot: '#f97316'  },
   completed: { bg: 'rgba(34,197,94,0.12)',  text: '#22c55e', dot: '#22c55e'  },
@@ -657,6 +660,7 @@ export default function CampaignPage() {
 
   const isBlocked =
     status.status === 'running' ||
+    status.status === 'ensuring' ||
     status.status === 'paused' ||
     status.status === 'stopping';
 
