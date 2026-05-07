@@ -654,6 +654,30 @@ class LineageDB:
             """,
             "CREATE INDEX IF NOT EXISTS idx_automation_workflow_runs_workflow ON automation_workflow_runs (workflow_id, started_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_automation_workflow_runs_recent ON automation_workflow_runs (started_at DESC)",
+            """
+            CREATE TABLE IF NOT EXISTS campaign_plans (
+                plan_id      TEXT PRIMARY KEY,
+                name         TEXT,
+                experiments  JSONB,
+                status       TEXT DEFAULT 'pending',
+                started_at   TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS campaign_results (
+                plan_id          TEXT,
+                experiment_index INT,
+                config           JSONB,
+                status           TEXT DEFAULT 'pending',
+                scores           JSONB,
+                duration_seconds DOUBLE PRECISION,
+                error            TEXT,
+                started_at       TIMESTAMPTZ,
+                completed_at     TIMESTAMPTZ,
+                PRIMARY KEY (plan_id, experiment_index)
+            )
+            """,
         ]
         async with self._pool.acquire() as conn:
             for stmt in ddl:
