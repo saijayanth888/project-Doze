@@ -259,11 +259,43 @@ class LMEvalHarnessBackend:
         bench_callback: Callable[[str], None] | None = None,
         bench_complete_callback: Callable[[str, float, float], None] | None = None,
     ) -> EvalResult:
+        try:
+            return self._evaluate_sync_inner(
+                run_id, generation, adapter_path, config,
+                should_stop, bench_callback, bench_complete_callback,
+            )
+        finally:
+            # Release allocator state between evals so a long-running API
+            # process doesn't accumulate fragmented allocations across runs.
+            import gc
+            gc.collect()
+            try:
+                import torch as _torch
+                if _torch.cuda.is_available():
+                    _torch.cuda.empty_cache()
+                    if hasattr(_torch.cuda, "ipc_collect"):
+                        _torch.cuda.ipc_collect()
+            except Exception as exc:
+                logger.debug("[lm-eval] cuda cleanup skipped: %s", exc)
+
+    def _evaluate_sync_inner(
+        self,
+        run_id: str,
+        generation: int,
+        adapter_path: str | None,
+        config: dict | None,
+        should_stop: Callable[[], bool] | None = None,
+        bench_callback: Callable[[str], None] | None = None,
+        bench_complete_callback: Callable[[str, float, float], None] | None = None,
+    ) -> EvalResult:
         import inspect as _inspect
 
         import lm_eval
 
         from utils.hf_model_id import resolve_hf_base_model_id
+        from utils.memory_guard import check_memory
+
+        check_memory(min_gb=10.0, label=f"pre-eval run={run_id} gen={generation}")
 
         harness_version = getattr(lm_eval, "__version__", "unknown")
 
@@ -310,106 +342,149 @@ class LMEvalHarnessBackend:
             bench_names,
         )
 
-        for bench in bench_names:
-            # Cooperative stop: the campaign runner flips a flag when the user
-            # clicks Stop in the UI. Check at each benchmark boundary so we
-            # bail out without waiting for the full multi-benchmark sweep.
-            if should_stop and should_stop():
-                logger.info("[lm-eval] run=%s aborting at bench=%s — stop requested", run_id, bench)
-                raise EvalStopped(f"stopped before {bench}")
+        # Pre-load the HF model ONCE and reuse it across all benchmarks.
+        # Previously we passed model="hf"+model_args into each per-benchmark
+        # simple_evaluate call, which caused lm-eval to re-instantiate the
+        # full model (~14GB for a 7B at bf16) on every iteration. With 5
+        # benchmarks × ~14GB and lazy GC, peak unified-memory usage on the
+        # DGX Spark blew past the 96GB cap and crashed the host. Loading
+        # once and passing the LM instance keeps us at one model copy for
+        # the whole sweep while preserving per-task num_fewshot / gen_kwargs
+        # (the bits that simple_evaluate would silently lose if we batched
+        # all tasks into one call — lm-eval's task YAML defaults differ
+        # from our canonical leaderboard config for arc/hellaswag/mmlu).
+        model_args = f"pretrained={base_model},dtype=bfloat16,trust_remote_code=True"
+        if adapter_path:
+            model_args += f",peft={adapter_path}"
+        lm_obj = lm_eval.api.registry.get_model("hf").create_from_arg_string(
+            model_args,
+            {"batch_size": "auto", "device": "cuda"},
+        )
 
-            # Surface the currently-running benchmark to the campaign runner so
-            # the dashboard can show "Now evaluating: arc_challenge" instead of
-            # appearing frozen for 30 minutes per experiment.
-            if bench_callback:
+        try:
+            for bench in bench_names:
+                # Cooperative stop: the campaign runner flips a flag when the
+                # user clicks Stop in the UI. Check at each benchmark boundary
+                # so we bail out without waiting for the full sweep.
+                if should_stop and should_stop():
+                    logger.info("[lm-eval] run=%s aborting at bench=%s — stop requested", run_id, bench)
+                    raise EvalStopped(f"stopped before {bench}")
+
+                if bench_callback:
+                    try:
+                        bench_callback(bench)
+                    except Exception:
+                        pass
+
+                cfg = _TASK_CONFIG.get(bench)
+                if not cfg:
+                    logger.warning("[lm-eval] unknown benchmark: %s", bench)
+                    scores[bench] = 0.0
+                    continue
+
+                # Pick the instruct variant when applicable (humaneval_instruct
+                # for chat-tuned bases; gsm8k_cot is shared).
+                task_id = cfg.get("instruct_task") if is_instruct and cfg.get("instruct_task") else cfg["task"]
+
                 try:
-                    bench_callback(bench)
-                except Exception:
-                    pass
+                    kwargs: dict = dict(
+                        model=lm_obj,  # ← reuse the pre-loaded model
+                        tasks=[task_id],
+                        num_fewshot=int(cfg["num_fewshot"]),
+                        batch_size="auto",
+                        device="cuda",
+                        limit=limit_override,
+                    )
 
-            cfg = _TASK_CONFIG.get(bench)
-            if not cfg:
-                logger.warning("[lm-eval] unknown benchmark: %s", bench)
-                scores[bench] = 0.0
-                continue
+                    if is_instruct and "apply_chat_template" in sig_params:
+                        kwargs["apply_chat_template"] = True
+                        if "fewshot_as_multiturn" in sig_params and int(cfg["num_fewshot"]) > 0:
+                            kwargs["fewshot_as_multiturn"] = True
 
-            # Pick the instruct variant of the task when available + applicable
-            # (e.g. humaneval_instruct for chat-tuned bases). `gsm8k_cot` works
-            # for both base + instruct so its instruct_task points at the same id.
-            task_id = cfg.get("instruct_task") if is_instruct and cfg.get("instruct_task") else cfg["task"]
+                    gen_kwargs = cfg.get("gen_kwargs")
+                    if gen_kwargs and "gen_kwargs" in sig_params:
+                        kwargs["gen_kwargs"] = ",".join(f"{k}={v}" for k, v in gen_kwargs.items())
 
-            try:
-                model_args = f"pretrained={base_model},dtype=bfloat16,trust_remote_code=True"
-                if adapter_path:
-                    model_args += f",peft={adapter_path}"
+                    if cfg.get("requires_code_exec") and "confirm_run_unsafe_code" in sig_params:
+                        kwargs["confirm_run_unsafe_code"] = True
 
-                kwargs: dict = dict(
-                    model="hf",
-                    model_args=model_args,
-                    tasks=[task_id],
-                    num_fewshot=int(cfg["num_fewshot"]),
-                    batch_size="auto",
-                    device="cuda",
-                    limit=limit_override,
-                )
+                    results = lm_eval.simple_evaluate(**kwargs)
+                    r = (results or {}).get("results", {}).get(task_id, {}) or {}
+                    score = _extract_lm_eval_score(bench, r)
+                    logger.info(
+                        "[lm-eval] %s (task=%s) = %.4f (keys=%s)",
+                        bench,
+                        task_id,
+                        score,
+                        [k for k in r.keys() if not k.endswith("_stderr,none") and "," in k],
+                    )
+                    scores[bench] = float(score)
+                    stderr = 0.0
+                    score_keys = _TASK_CONFIG.get(bench, {}).get("score_keys", ())
+                    for sk in score_keys:
+                        if "," in sk:
+                            prefix, _, suffix = sk.partition(",")
+                            stderr_key = f"{prefix}_stderr,{suffix}"
+                        else:
+                            stderr_key = f"{sk}_stderr"
+                        val = r.get(stderr_key)
+                        if isinstance(val, (int, float)):
+                            stderr = float(val)
+                            break
+                    stderrs[bench] = stderr
+                    if bench_complete_callback:
+                        try:
+                            bench_complete_callback(bench, float(score), float(stderr))
+                        except Exception:
+                            pass
 
-                # Instruct models need the chat template applied or generative
-                # tasks score near-zero. fewshot_as_multiturn is only meaningful
-                # when a chat template is in play.
-                if is_instruct and "apply_chat_template" in sig_params:
-                    kwargs["apply_chat_template"] = True
-                    if "fewshot_as_multiturn" in sig_params and int(cfg["num_fewshot"]) > 0:
-                        kwargs["fewshot_as_multiturn"] = True
+                    # Free the per-bench results dict + flush CUDA caches
+                    # between benchmarks so transient generation buffers don't
+                    # accumulate (the model itself stays loaded — that's the
+                    # whole point of the outer pre-load).
+                    del results
+                    import gc as _gc
+                    _gc.collect()
+                    try:
+                        import torch as _torch
+                        if _torch.cuda.is_available():
+                            _torch.cuda.empty_cache()
+                            _torch.cuda.synchronize()
+                    except Exception:
+                        pass
 
-                # Generation kwargs forwarded to generate_until tasks.
-                gen_kwargs = cfg.get("gen_kwargs")
-                if gen_kwargs and "gen_kwargs" in sig_params:
-                    kwargs["gen_kwargs"] = ",".join(f"{k}={v}" for k, v in gen_kwargs.items())
-
-                # Code-execution opt-in for HumanEval-family tasks.
-                if cfg.get("requires_code_exec") and "confirm_run_unsafe_code" in sig_params:
-                    kwargs["confirm_run_unsafe_code"] = True
-
-                results = lm_eval.simple_evaluate(**kwargs)
-                r = (results or {}).get("results", {}).get(task_id, {}) or {}
-                score = _extract_lm_eval_score(bench, r)
-                logger.info(
-                    "[lm-eval] %s (task=%s) = %.4f (keys=%s)",
-                    bench,
-                    task_id,
-                    score,
-                    [k for k in r.keys() if not k.endswith("_stderr,none") and "," in k],
-                )
-                scores[bench] = float(score)
-                # Pull the matching stderr if present. lm-eval reports stderr keys as
-                # "acc_stderr,none", "exact_match_stderr,strict-match", "pass@1_stderr,none"
-                # — i.e. the score key with `_stderr` inserted before the `,`.
-                stderr = 0.0
-                score_keys = _TASK_CONFIG.get(bench, {}).get("score_keys", ())
-                for sk in score_keys:
-                    if "," in sk:
-                        prefix, _, suffix = sk.partition(",")
-                        stderr_key = f"{prefix}_stderr,{suffix}"
-                    else:
-                        stderr_key = f"{sk}_stderr"
-                    val = r.get(stderr_key)
-                    if isinstance(val, (int, float)):
-                        stderr = float(val)
+                    try:
+                        check_memory(min_gb=8.0, label=f"post-{bench} run={run_id}")
+                    except RuntimeError as exc:
+                        logger.error(
+                            "[lm-eval] memory critically low after %s, aborting remaining benchmarks: %s",
+                            bench, exc,
+                        )
                         break
-                stderrs[bench] = stderr
-                if bench_complete_callback:
-                    try:
-                        bench_complete_callback(bench, float(score), float(stderr))
-                    except Exception:
-                        pass
-            except Exception as exc:
-                logger.exception("[lm-eval] task failed (%s/%s): %s", bench, task_id, exc)
-                scores[bench] = 0.0
-                if bench_complete_callback:
-                    try:
-                        bench_complete_callback(bench, 0.0, 0.0)
-                    except Exception:
-                        pass
+                except Exception as exc:
+                    logger.exception("[lm-eval] task failed (%s/%s): %s", bench, task_id, exc)
+                    scores[bench] = 0.0
+                    if bench_complete_callback:
+                        try:
+                            bench_complete_callback(bench, 0.0, 0.0)
+                        except Exception:
+                            pass
+        finally:
+            # Drop the model reference + flush before returning so the next
+            # eval starts from a clean allocator state.
+            try:
+                del lm_obj
+            except Exception:
+                pass
+            import gc as _gc
+            _gc.collect()
+            try:
+                import torch as _torch
+                if _torch.cuda.is_available():
+                    _torch.cuda.empty_cache()
+                    _torch.cuda.synchronize()
+            except Exception:
+                pass
 
         elapsed = time.perf_counter() - t0
         logger.info("[lm-eval] run=%s gen=%d scores=%s (%.1fs)", run_id, generation, scores, elapsed)

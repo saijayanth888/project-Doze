@@ -122,8 +122,17 @@ services:
       stack:
         soft: 67108864
         hard: 67108864
+    # Cap the API container at 96GB of the 128GB unified DRAM, leaving 32GB
+    # for the host OS, desktop session, and the systemd-Ollama serve process.
+    # On DGX Spark a runaway training job can otherwise drag the whole host
+    # into OOM territory and freeze the desktop. `mem_limit` is the standalone-
+    # compose form; `deploy.resources.limits` is the spec-compliant form.
+    mem_limit: 96g
+    memswap_limit: 96g
     deploy:
       resources:
+        limits:
+          memory: 96G
         reservations:
           devices:
             - driver: nvidia

@@ -61,8 +61,11 @@ def mutate_adapter(
         from datasets import Dataset
         from peft import LoraConfig, PeftModel, get_peft_model
         from utils.lora_targets import get_lora_target_modules
+        from utils.memory_guard import check_memory
         from transformers import AutoModelForCausalLM, AutoTokenizer
         from trl import SFTConfig, SFTTrainer
+
+        check_memory(min_gb=12.0, label=f"pre-mutation out={os.path.basename(output_dir)}")
 
         # Resolve any Ollama-tag base into a HF id.
         try:

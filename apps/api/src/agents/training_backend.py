@@ -120,6 +120,11 @@ class LoRATrainingBackend:
         )
         from trl import SFTConfig, SFTTrainer
 
+        from utils.memory_guard import check_memory
+        # Refuse to start a LoRA fine-tune if DRAM is already too low —
+        # cheaper to fail fast than to wedge the host on a unified-memory box.
+        check_memory(min_gb=15.0, label=f"pre-training run={run_id} gen={generation}")
+
         class _RedisMetricsCallback(TrainerCallback):
             def __init__(self, rid: str) -> None:
                 self._run_id = rid

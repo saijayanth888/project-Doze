@@ -861,6 +861,13 @@ class CampaignRunner:
                     torch.cuda.synchronize()
             except Exception:
                 pass
+            # Log DRAM headroom between experiments so a slow leak across the
+            # campaign is visible in logs rather than only when the host wedges.
+            try:
+                from utils.memory_guard import check_memory
+                check_memory(min_gb=0.0, label="campaign-between-experiments")
+            except Exception:
+                pass
         except Exception:
             pass
 

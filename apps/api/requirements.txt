@@ -17,6 +17,7 @@ langchain-core==0.3.28
 structlog==24.4.0
 pgvector==0.3.6
 filelock==3.16.1
+psutil>=5.9
 # In-process automation engine — replaces n8n cron triggers.
 apscheduler>=3.10,<4
 croniter>=2.0,<3
