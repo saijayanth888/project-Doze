@@ -1092,7 +1092,8 @@ export default function EvolutionStatus() {
                 </div>
               )}
               {/* Gated-model nudge */}
-              {modelValidation && modelValidation.gated === true && (
+              {modelValidation && modelValidation.gated === true &&
+                !ollamaModels.some((m) => m.toLowerCase() === (modelValidation.model_id || '').toLowerCase()) && (
                 <div
                   style={{
                     marginTop: 8,
