@@ -95,6 +95,7 @@ _PROMOTED_GENS: frozenset[int] = frozenset({1, 3, 4})
 class EvalResult:
     scores: dict[str, float] = field(default_factory=dict)
     duration_seconds: float = 0.0
+    harness_version: str = ""
 
 
 class EvalBackend(Protocol):
@@ -226,6 +227,8 @@ class LMEvalHarnessBackend:
 
         from utils.hf_model_id import resolve_hf_base_model_id
 
+        harness_version = getattr(lm_eval, "__version__", "unknown")
+
         # HumanEval refuses to score without this on the harness side.
         os.environ.setdefault("HF_ALLOW_CODE_EVAL", "1")
 
@@ -329,4 +332,8 @@ class LMEvalHarnessBackend:
 
         elapsed = time.perf_counter() - t0
         logger.info("[lm-eval] run=%s gen=%d scores=%s (%.1fs)", run_id, generation, scores, elapsed)
-        return EvalResult(scores=scores, duration_seconds=float(elapsed))
+        return EvalResult(
+            scores=scores,
+            duration_seconds=float(elapsed),
+            harness_version=harness_version,
+        )

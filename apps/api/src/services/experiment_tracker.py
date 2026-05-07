@@ -116,6 +116,7 @@ async def build_records(db: LineageDB, *, limit: int = 500) -> list[dict[str, An
                 },
                 "system_metrics": {
                     "gpu_name":           data.get("gpu_name"),
+                    "harness_version":    data.get("harness_version") or "unknown",
                     "peak_memory_gb":     data.get("peak_memory_gb"),
                     "total_duration_sec": (
                         float(data.get("training_seconds") or 0.0)
