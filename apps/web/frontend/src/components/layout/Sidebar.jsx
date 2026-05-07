@@ -13,6 +13,7 @@ import {
   History,
   ChevronLeft,
   ChevronRight,
+  FlaskConical,
 } from 'lucide-react';
 import { C, F } from '../../config/colors';
 import MFLogo from '../shared/MFLogo';
@@ -27,6 +28,7 @@ const NAV = [
   { id: 'playground', path: '/playground', label: 'Playground', icon: MessageSquare },
   { id: 'forge', path: '/forge', label: 'ForgeAgent', icon: Compass },
   { id: 'ept', path: '/ept', label: 'Population (EPT)', icon: Dna },
+  { id: 'campaign', path: '/campaign', label: 'Campaign', icon: FlaskConical },
   { id: 'automation', path: '/automation', label: 'Automation', icon: Bot },
   { id: 'history', path: '/history', label: 'Run History', icon: History },
   { id: 'settings', path: '/settings', label: 'Settings', icon: Settings2 },
