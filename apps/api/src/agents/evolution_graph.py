@@ -87,6 +87,7 @@ class EvolutionState(TypedDict, total=False):
     regression_report: dict[str, Any] | None
     eval_seconds: float
     harness_version: str
+    stderrs: dict[str, float]
     cancelled: bool
     error: str | None
     champion_path: str | None
@@ -516,6 +517,7 @@ def build_graph(
         state["child_scores"] = result.scores
         state["eval_seconds"] = result.duration_seconds or (time.perf_counter() - t0)
         state["harness_version"] = result.harness_version or "unknown"
+        state["stderrs"] = result.stderrs or {}
         # Per-benchmark recap so the user sees the exact scores in the events
         # feed without leaving the dashboard.
         for bench, score in (result.scores or {}).items():

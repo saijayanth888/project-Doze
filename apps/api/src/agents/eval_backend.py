@@ -96,6 +96,7 @@ class EvalResult:
     scores: dict[str, float] = field(default_factory=dict)
     duration_seconds: float = 0.0
     harness_version: str = ""
+    stderrs: dict[str, float] = field(default_factory=dict)
 
 
 class EvalBackend(Protocol):
@@ -260,6 +261,7 @@ class LMEvalHarnessBackend:
         sig_params = set(_inspect.signature(lm_eval.simple_evaluate).parameters.keys())
 
         scores: dict[str, float] = {}
+        stderrs: dict[str, float] = {}
         logger.info(
             "[lm-eval] run=%s gen=%d base=%s adapter=%s instruct=%s quick=%s tasks=%s",
             run_id,
@@ -326,6 +328,22 @@ class LMEvalHarnessBackend:
                     [k for k in r.keys() if not k.endswith("_stderr,none") and "," in k],
                 )
                 scores[bench] = float(score)
+                # Pull the matching stderr if present. lm-eval reports stderr keys as
+                # "acc_stderr,none", "exact_match_stderr,strict-match", "pass@1_stderr,none"
+                # — i.e. the score key with `_stderr` inserted before the `,`.
+                stderr = 0.0
+                score_keys = _TASK_CONFIG.get(bench, {}).get("score_keys", ())
+                for sk in score_keys:
+                    if "," in sk:
+                        prefix, _, suffix = sk.partition(",")
+                        stderr_key = f"{prefix}_stderr,{suffix}"
+                    else:
+                        stderr_key = f"{sk}_stderr"
+                    val = r.get(stderr_key)
+                    if isinstance(val, (int, float)):
+                        stderr = float(val)
+                        break
+                stderrs[bench] = stderr
             except Exception as exc:
                 logger.exception("[lm-eval] task failed (%s/%s): %s", bench, task_id, exc)
                 scores[bench] = 0.0
@@ -336,4 +354,5 @@ class LMEvalHarnessBackend:
             scores=scores,
             duration_seconds=float(elapsed),
             harness_version=harness_version,
+            stderrs=stderrs,
         )

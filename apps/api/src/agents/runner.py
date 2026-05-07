@@ -305,6 +305,7 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
                     "decision_reason": s.get("decision_reason"),
                     "method": s.get("method"),
                     "harness_version": s.get("harness_version", "unknown"),
+                    "stderrs": dict(s.get("stderrs") or {}),
                     "training_data_size": s.get("training_data_size", 0),
                     # Persist the full run config so AdaptersPage can show
                     # training hyperparameters (lora_rank/alpha/lr/batch/base) in
