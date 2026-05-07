@@ -791,19 +791,46 @@ class CampaignRunner:
     async def _db_upsert_result(self, db, idx: int, exp: dict, *, status: str, started: bool) -> None:
         if not db or not getattr(db, "_pool", None) or not self.active_plan_id:
             return
+        # When `started=True` (each new experiment attempt) we want a fresh
+        # row: refresh started_at to NOW() AND clear any leftover finish-side
+        # columns (completed_at, scores, duration, error) so a re-run of the
+        # same (plan_id, experiment_index) doesn't render stale data from a
+        # prior attempt. The previous COALESCE-on-started_at preserved the
+        # first-ever timestamp forever, which made the UI show times hours
+        # off from reality after a force-stop + restart.
         async with db._pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO campaign_results
-                    (plan_id, experiment_index, config, status, started_at)
-                VALUES ($1, $2, $3::jsonb, $4, NOW())
-                ON CONFLICT (plan_id, experiment_index) DO UPDATE SET
-                    status = EXCLUDED.status,
-                    started_at = COALESCE(campaign_results.started_at, EXCLUDED.started_at),
-                    config = EXCLUDED.config
-                """,
-                self.active_plan_id, idx, json.dumps(exp), status,
-            )
+            if started:
+                await conn.execute(
+                    """
+                    INSERT INTO campaign_results
+                        (plan_id, experiment_index, config, status, started_at,
+                         completed_at, scores, duration_seconds, error)
+                    VALUES ($1, $2, $3::jsonb, $4, NOW(),
+                            NULL, '{}'::jsonb, 0, NULL)
+                    ON CONFLICT (plan_id, experiment_index) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        config = EXCLUDED.config,
+                        started_at = NOW(),
+                        completed_at = NULL,
+                        scores = '{}'::jsonb,
+                        duration_seconds = 0,
+                        error = NULL
+                    """,
+                    self.active_plan_id, idx, json.dumps(exp), status,
+                )
+            else:
+                # Status-only update (rare path) — keep the existing started_at.
+                await conn.execute(
+                    """
+                    INSERT INTO campaign_results
+                        (plan_id, experiment_index, config, status, started_at)
+                    VALUES ($1, $2, $3::jsonb, $4, NOW())
+                    ON CONFLICT (plan_id, experiment_index) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        config = EXCLUDED.config
+                    """,
+                    self.active_plan_id, idx, json.dumps(exp), status,
+                )
 
     async def _db_finish_result(
         self, db, idx: int, *, status: str,
