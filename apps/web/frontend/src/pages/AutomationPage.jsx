@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { C, F } from '../config/colors';
 import { apiFetch } from '../config/api';
+import LoadingSkeleton from '../components/shared/LoadingSkeleton';
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -936,6 +937,7 @@ function WorkflowListItem({ wf, selected, onPick }) {
 
 export default function AutomationPage() {
   const [workflows, setWorkflows] = useState([]);
+  const [loadingWorkflows, setLoadingWorkflows] = useState(true);
   const [actionSchemas, setActionSchemas] = useState({});
   const [triggerSchemas, setTriggerSchemas] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -955,6 +957,7 @@ export default function AutomationPage() {
       const r = await apiFetch('/api/automation/workflows');
       setWorkflows(r?.workflows || []);
     } catch { setWorkflows([]); }
+    finally { setLoadingWorkflows(false); }
   }, []);
   const loadSchemas = useCallback(async () => {
     try {
@@ -1133,7 +1136,9 @@ export default function AutomationPage() {
             ))}
           </div>
           <div style={{ overflowY: 'auto', flex: 1 }}>
-            {filtered.length === 0 ? (
+            {loadingWorkflows ? (
+              <LoadingSkeleton rows={5} height={44} style={{ margin: 12 }} />
+            ) : filtered.length === 0 ? (
               <div style={{ padding: 16, textAlign: 'center', color: C.txtM, fontFamily: F.ui, fontSize: 12 }}>
                 {workflows.length === 0 ? 'Engine seeds 7 default workflows on first boot — refresh in a moment.' : 'No workflows match the filter.'}
               </div>

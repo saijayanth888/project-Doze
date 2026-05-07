@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { C, F } from '../../config/colors';
 import { apiFetch } from '../../config/api';
 import Badge from '../shared/Badge';
+import { BENCHMARK_INFO } from '../../data/benchmarkInfo';
+import InfoTooltip from '../shared/InfoTooltip';
 
 export default function LatestGeneration() {
   const [gens, setGens] = useState([]);
@@ -143,7 +145,9 @@ export default function LatestGeneration() {
           const d = cd - pd;
           return (
             <div key={bench} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
-              <span style={{ fontFamily: F.mono, fontSize: 11, color: C.txtM, width: 110, flexShrink: 0 }}>{bench}</span>
+              <span style={{ fontFamily: F.mono, fontSize: 11, color: C.txtM, width: 110, flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                {bench}<InfoTooltip info={BENCHMARK_INFO[bench]} size={11} />
+              </span>
               <span style={{ fontFamily: F.mono, fontSize: 11, color: C.txtS, width: 48 }}>{pd.toFixed(3)}</span>
               <span style={{ fontFamily: F.mono, fontSize: 11, color: d > 0 ? C.success : d < 0 ? C.danger : C.txtM, width: 56, fontWeight: 600 }}>
                 {d > 0 ? '+' : ''}

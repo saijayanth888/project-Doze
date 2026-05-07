@@ -24,6 +24,9 @@ import {
 } from 'recharts';
 import { BENCH_COLORS, C, F } from '../config/colors';
 import { apiFetch } from '../config/api';
+import { BENCHMARK_INFO } from '../data/benchmarkInfo';
+import InfoTooltip from '../components/shared/InfoTooltip';
+import LoadingSkeleton from '../components/shared/LoadingSkeleton';
 
 const POLL_MS = 4000;
 const BENCHMARK_OPTIONS = ['mmlu', 'arc_challenge', 'hellaswag', 'gsm8k', 'humaneval'];
@@ -159,7 +162,11 @@ function CrossoverInspector({ child, members }) {
             <tbody>
               {benches.map((k) => (
                 <tr key={k}>
-                  <td style={{ padding: '3px 6px', color: BENCH_COLORS[k] }}>{k}</td>
+                  <td style={{ padding: '3px 6px', color: BENCH_COLORS[k] }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      {k}<InfoTooltip info={BENCHMARK_INFO[k]} size={11} />
+                    </span>
+                  </td>
                   <td style={{ textAlign: 'right', padding: '3px 6px' }}>{typeof a.scores?.[k] === 'number' ? a.scores[k].toFixed(3) : '—'}</td>
                   <td style={{ textAlign: 'right', padding: '3px 6px' }}>{typeof b.scores?.[k] === 'number' ? b.scores[k].toFixed(3) : '—'}</td>
                   <td style={{ textAlign: 'right', padding: '3px 6px' }}>{typeof child.scores?.[k] === 'number' ? child.scores[k].toFixed(3) : '—'}</td>
@@ -426,6 +433,10 @@ export default function EPTPage() {
     });
   }, [population]);
 
+  if (status === null) {
+    return <LoadingSkeleton rows={6} height={48} style={{ padding: '8px 0 40px', maxWidth: 1500, margin: '0 auto' }} />;
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: '8px 0 40px', maxWidth: 1500, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -637,7 +648,9 @@ export default function EPTPage() {
                     const v = selected.scores?.[k];
                     return (
                       <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontFamily: F.mono, fontSize: 11 }}>
-                        <span style={{ color: BENCH_COLORS[k] }}>{k}</span>
+                        <span style={{ color: BENCH_COLORS[k], display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          {k}<InfoTooltip info={BENCHMARK_INFO[k]} size={11} />
+                        </span>
                         <span style={{ color: typeof v === 'number' ? C.txtP : C.txtM }}>
                           {typeof v === 'number' ? v.toFixed(3) : '—'}
                         </span>
