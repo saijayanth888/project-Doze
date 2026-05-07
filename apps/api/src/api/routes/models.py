@@ -2,18 +2,39 @@
 
 import logging
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from api.deps import get_ollama, get_registry
 from api.schemas.models import ChampionInfo, ModelInfo, ModelList
 from services.model_registry import ModelRegistry
+from utils.lora_targets import get_lora_target_modules
+from utils.memory_estimator import estimate_training_memory
 
 logger = logging.getLogger("modelforge.routes.models")
 
 router = APIRouter()
 
 # Static `/champion` must stay before `/{model_id}` so "champion" is never captured as a model id.
+
+
+class _ValidateBody(BaseModel):
+    model_id: str
+
+
+def _fetch_hf_model_info(model_id: str) -> dict | None:
+    """Public HF API; no auth needed for ungated models. Returns None on
+    any error / 4xx so the route returns ``{"valid": False, ...}``
+    instead of leaking the upstream error to the client."""
+    try:
+        with httpx.Client(timeout=10.0) as cli:
+            r = cli.get(f"https://huggingface.co/api/models/{model_id}")
+            if r.status_code == 200:
+                return r.json()
+    except Exception:
+        pass
+    return None
 
 
 def _normalize_champion_dict(raw: dict) -> dict:
@@ -145,6 +166,24 @@ async def pull_model(body: dict, ollama=Depends(get_ollama)) -> dict:
         raise HTTPException(status_code=400, detail="model tag required")
     await ollama.pull(str(model))
     return {"status": "ok", "model": str(model)}
+
+
+@router.post("/validate")
+async def validate_model(body: _ValidateBody) -> dict:
+    info = _fetch_hf_model_info(body.model_id)
+    if info is None:
+        return {"valid": False, "model_id": body.model_id, "reason": "not_found"}
+    est = estimate_training_memory(body.model_id)
+    return {
+        "valid": True,
+        "model_id": body.model_id,
+        "gated": bool(info.get("gated")),
+        "private": bool(info.get("private")),
+        "tags": info.get("tags", []),
+        "lora_target_modules": get_lora_target_modules(body.model_id),
+        "estimated_memory_gb": est["estimated_peak_gb"],
+        "fits_128gb": est["fits_128gb"],
+    }
 
 
 @router.get("/{model_id}", response_model=ModelInfo)
