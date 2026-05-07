@@ -67,6 +67,66 @@ async def test_graph_runs_to_max_generations():
 
 
 @pytest.mark.asyncio
+async def test_promoted_generation_persists_real_parent_scores():
+    """Regression: ``promote_or_discard`` advanced ``parent_scores`` to a copy
+    of ``child_scores`` *before* the persistence callback fired, so every
+    promoted generation row in the DB had ``parent_scores == child_scores``
+    and a delta of zero — even when the decision_reason held real deltas
+    computed earlier in ``compare_to_champion``.
+
+    The fix: defer the advance until after ``_emit("promote_or_discard")``
+    so the callback sees the original parent.
+    """
+    saved: list[dict[str, Any]] = []
+
+    async def cb(state: Any, step: str) -> None:
+        if step == "promote_or_discard":
+            saved.append({
+                "gen": state.get("generation"),
+                "decision": state.get("decision"),
+                "parent_scores": dict(state.get("parent_scores") or {}),
+                "child_scores": dict(state.get("child_scores") or {}),
+            })
+
+    graph = build_graph(
+        training=MockTrainingBackend(0.0),
+        eval_backend=MockEvalBackend(0.0),
+        curator=MockDataCurator(),
+        on_state_change=cb,
+    )
+
+    await graph.ainvoke(
+        {
+            "run_id": "test-parent-snapshot",
+            "config": {"max_generations": 4},
+            "generation": 0,
+            "max_generations": 4,
+            "parent_scores": {},
+            "child_scores": {},
+            "decision": "",
+            "decision_reason": "",
+            "champion_avg": 0.0,
+        },
+        {"recursion_limit": 100},
+    )
+
+    # MockEvalBackend curve: gen 1 promote (no parent), gen 2 discard,
+    # gen 3 promote, gen 4 promote — gens 3 and 4 have a real prior champion.
+    promoted_with_parent = [
+        s for s in saved
+        if s["decision"] == "promote" and s["parent_scores"]
+    ]
+    assert promoted_with_parent, (
+        "expected at least one promoted gen with non-empty parent_scores"
+    )
+    for s in promoted_with_parent:
+        assert s["parent_scores"] != s["child_scores"], (
+            f"gen {s['gen']}: parent_scores was clobbered to child_scores "
+            f"before persistence — {s['parent_scores']}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_graph_respects_cancellation():
     cancelled_state = {"flag": False}
 

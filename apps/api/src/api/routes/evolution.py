@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from agents import request_stop, start_evolution
 from api.deps import get_db
+from utils.memory_estimator import estimate_training_memory
 from api.schemas.evolution import (
     EvolutionPollStatus,
     EvolutionRequest,
@@ -89,6 +90,18 @@ async def start_evolution_route(
     """Persist a new run and kick the LangGraph agent off in the background."""
     run_id = f"run-{uuid4().hex[:8]}"
     config = req.model_dump()
+
+    estimate = estimate_training_memory(
+        req.base_model,
+        lora_rank=getattr(req, "lora_rank", None) or 16,
+        batch_size=getattr(req, "batch_size", None) or 2,
+    )
+    if not estimate["fits_128gb"]:
+        logger.warning(
+            "[evolve/start] memory estimate %.1fGB exceeds 110GB safe limit for %s",
+            estimate["estimated_peak_gb"], req.base_model,
+        )
+    config["memory_estimate"] = estimate
 
     try:
         await db.save_run(run_id, "starting", config)

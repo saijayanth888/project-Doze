@@ -30,6 +30,7 @@ and a real-time dashboard.
 
 ## Table of contents
 
+- [What's new — research-backed hardening (May 2026)](#whats-new--research-backed-hardening-may-2026)
 - [Tomorrow's pickup playbook](#tomorrows-pickup-playbook)
 - [What it is](#what-it-is)
 - [Why it exists](#why-it-exists)
@@ -46,6 +47,7 @@ and a real-time dashboard.
 - [Repository layout](#repository-layout)
 - [Operational concerns](#operational-concerns)
 - [Roadmap](#roadmap)
+- [Related work](#related-work)
 - [Acknowledgements](#acknowledgements)
 - [License](#license)
 
@@ -91,6 +93,64 @@ a *bad* trade, even when the average improves.
 packaging crossover + tournament + mutation + lineage tracking inside an
 autonomous loop with a real UI, on a single-GPU consumer host, with full
 methodology metadata persisted for paper-grade reproducibility.
+
+---
+
+## What's new — research-backed hardening (May 2026)
+
+A 14-fix pass landing on the `hardening/research-backed-fixes` branch
+brings the eval pipeline to paper-grade quality and unlocks the 4-week
+campaign mode. Highlights:
+
+- **GSM8K + HumanEval no longer score 0.** lm-eval-harness now runs
+  `gsm8k_cot` (CoT, 8-shot) instead of the loglikelihood `gsm8k`,
+  applies the chat template + `fewshot_as_multiturn` for instruct
+  models, sets `confirm_run_unsafe_code` for HumanEval, and forwards
+  per-task `gen_kwargs` (max_gen_toks, temperature, do_sample). See
+  `apps/api/src/agents/eval_backend.py` (`_TASK_CONFIG`).
+- **Per-model LoRA targets** including the MLP block (`gate_proj`,
+  `up_proj`, `down_proj`) — Gemma-2 silently no-op'd on the legacy
+  4-module attention-only set. Lookup at
+  `apps/api/src/utils/lora_targets.py`, used in both training and EPT
+  mutation.
+- **TIES + DARE crossover** added to EPT's `CrossoverStrategy` enum
+  alongside the existing `uniform`, `layer_wise`, `random_swap`. Pure
+  tensor maths factored into `_merge_weights` so it's unit-testable.
+- **Memory estimator** at `apps/api/src/utils/memory_estimator.py`.
+  Coarse BF16 LoRA peak-VRAM lookup. `/api/evolve/start` returns the
+  estimate inside its config and logs a warning when the projected
+  peak exceeds the 110 GB safe limit on a 128 GB box.
+- **`harness_version` + per-task `stderrs`** captured on every
+  `EvalResult` and persisted through the runner into the per-generation
+  row's `data` JSONB. `system_metrics.harness_version` surfaces in
+  `/api/exports/experiment-data`. `/api/exports/evolution-curves` draws
+  shaded `fill_between` error bands at α=0.15.
+- **Pareto-correct per-generation rows.** The `parent_scores` advance
+  in `evolution_graph.promote_or_discard` deferred until *after* the
+  persistence emit, so saved rows now record the real parent→child
+  delta instead of identical-to-16-decimal-places parent==child.
+- **`POST /api/models/validate`** — public HF model-info lookup,
+  returns gated/private/tags + LoRA targets + memory estimate.
+  Backs the new shared `<ModelPicker>` component.
+- **`GET /api/campaigns`** — 7 pre-built research campaign matrices
+  (baseline, sequential evolution, EPT vs sequential, crossover
+  comparison, specialist vs generalist, LR ablation, rank ablation).
+  See `apps/api/src/services/campaign_configs.py`.
+- **Frontend foundations:** `<InfoTooltip>` + `BENCHMARK_INFO` /
+  `CONCEPT_INFO` reference data so non-ML users can hover GSM8K and
+  read what it tests + a good score band; `<LoadingSkeleton>` for
+  fetch states; `<ModelPicker>` over Ollama + HF; new **Campaign**
+  page at `/campaign` with a `FlaskConical` sidebar entry.
+- **docker-compose hardening:** `HF_ALLOW_CODE_EVAL=1` (HumanEval),
+  `TOKENIZERS_PARALLELISM=false` (silence noisy fork warnings),
+  `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (reuse
+  fragmented blocks instead of OOMing the next run).
+
+Pending follow-ups (intentionally deferred from this branch):
+4-week campaign autopilot endpoint (`POST /api/campaigns/4week/start`);
+an end-to-end 1-generation validation run with fresh GSM8K + HumanEval
+numbers; "contamination-controlled benchmarks" (Fix 4 in the spec; the
+spec content was corrupted in transit and could not be reconstructed).
 
 ---
 
@@ -1039,6 +1099,41 @@ In flight or pending:
 - ⬜ Track-level evolution loop — currently each global champion auto-promotes into matching tracks; a dedicated loop *per track* (target only its benchmarks) would let tracks diverge intentionally.
 
 ---
+
+## Related work
+
+ModelForge sits at the intersection of model merging, population-based
+training, and parameter-efficient fine-tuning. The closest prior work:
+
+- **Sakana AI — Evolutionary Model Merge** (Akiba et al., *Nature MI* 2025).
+  Evolutionary search over full-model merges. ModelForge differs in
+  granularity: we evolve **LoRA adapters** rather than full base models,
+  which makes population-based search tractable on a single Blackwell GPU.
+- **CycleQD** (Sakana, ICLR 2025). Quality-Diversity over model merges.
+  We are the GA-over-adapters analogue: same evolutionary spirit, narrower
+  search space, paired with multi-objective Pareto promotion instead of
+  QD novelty scoring.
+- **GENOME** (Zhang et al., arXiv:2503.01155, 2025). Population-based
+  evolution of LLMs — closest in scope to ModelForge. We add adapter
+  crossover (TIES + DARE) and run the whole loop on a 128 GB unified-memory
+  consumer-class box rather than a multi-node cluster.
+- **LoraHub** (Huang et al., 2024). Gradient-free LoRA composition via
+  black-box optimisation. ModelForge generalises this from "compose
+  N existing LoRAs" to "evolve a population of LoRAs across generations
+  with re-trained children."
+- **LoGenE** (Springer *IJCAS* 2025). Genetic evolution of LoRA adapters
+  for robotics. We apply the same genetic primitives to NLP benchmarks
+  (MMLU, ARC-C, HellaSwag, GSM8K, HumanEval) with multi-objective
+  selection.
+- **Population-Based Training** (Jaderberg et al., DeepMind 2017). The
+  conceptual ancestor — population-based search for hyperparameters.
+  ModelForge evolves **weights** (via LoRA deltas) instead of
+  hyperparameters, with Pareto-dominant promotion in place of fitness
+  proportional reproduction.
+
+**Positioning:** ModelForge is the first autonomous GA-over-LoRA-adapters
+platform with multi-objective Pareto selection, self-generated training
+data, and population evolution running on consumer Blackwell hardware.
 
 ## Acknowledgements
 

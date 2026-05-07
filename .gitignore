@@ -46,6 +46,8 @@ secrets/
 
 # ── Runtime data ──────────────────────────────────────
 data/
+# Frontend source data (static reference files — not runtime data)
+!apps/web/frontend/src/data/
 adapters/
 *.safetensors
 *.bin

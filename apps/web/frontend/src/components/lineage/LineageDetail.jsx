@@ -1,5 +1,7 @@
 import { X } from 'lucide-react';
 import { BENCH_COLORS } from '../../config/colors';
+import { BENCHMARK_INFO } from '../../data/benchmarkInfo';
+import InfoTooltip from '../shared/InfoTooltip';
 
 const KEYS = ['mmlu', 'arc_challenge', 'hellaswag', 'gsm8k', 'humaneval'];
 const BENCHMARK_LABELS = {
@@ -118,8 +120,9 @@ export default function LineageDetail({ node, onClose, allNodes = [] }) {
         return (
           <div key={k} style={{ marginBottom: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-              <span style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: '#64748b' }}>
+              <span style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: '#64748b', display: 'flex', alignItems: 'center' }}>
                 {BENCHMARK_LABELS[k]}
+                <InfoTooltip info={BENCHMARK_INFO[k]} size={11} />
               </span>
               <span style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: BENCH_COLORS[k] }}>
                 {typeof child === 'number' ? `${(child * 100).toFixed(1)}%` : '—'}

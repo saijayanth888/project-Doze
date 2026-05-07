@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from api.routes import (
     adapters,
     automation,
+    campaigns,
     configs,
     datasets,
     ept,
@@ -34,6 +35,7 @@ api_router.include_router(system.router, prefix="/system", tags=["System"])
 api_router.include_router(automation.router, prefix="/automation", tags=["Automation"])
 api_router.include_router(workflows.router, prefix="/automation", tags=["Automation/Workflows"])
 api_router.include_router(experiments.router, prefix="/experiments", tags=["Experiments"])
+api_router.include_router(campaigns.router, prefix="/campaigns", tags=["Campaigns"])
 api_router.include_router(exports.router, prefix="/export", tags=["Exports"])
 api_router.include_router(ept.router, prefix="/ept", tags=["EPT"])
 api_router.include_router(forge.router, prefix="/forge", tags=["ForgeAgent"])

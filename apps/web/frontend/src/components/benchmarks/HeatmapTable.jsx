@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { C, F } from '../../config/colors';
 import { ChevronUp, ChevronDown } from 'lucide-react';
+import { BENCHMARK_INFO } from '../../data/benchmarkInfo';
+import InfoTooltip from '../shared/InfoTooltip';
 
 const KEYS = ['mmlu', 'arc_challenge', 'hellaswag', 'gsm8k', 'humaneval'];
 const BENCHMARK_LABELS = {
@@ -138,6 +140,7 @@ export default function HeatmapTable({ rows = [] }) {
                   }}
                 >
                   {BENCHMARK_LABELS[k]}
+                  <InfoTooltip info={BENCHMARK_INFO[k]} size={11} />
                   {sortKey === k &&
                     (sortDir === 'asc' ? <ChevronUp size={10} /> : <ChevronDown size={10} />)}
                 </span>

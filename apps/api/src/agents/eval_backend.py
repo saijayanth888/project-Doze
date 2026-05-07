@@ -18,26 +18,59 @@ logger = logging.getLogger("modelforge.agents.eval")
 
 _BENCHMARKS: tuple[str, ...] = ("mmlu", "arc_challenge", "hellaswag", "gsm8k", "humaneval")
 
-# lm-eval-harness reports different metric keys per task.
-# Loglikelihood tasks (MMLU, ARC, HellaSwag) use `acc,none` / `acc_norm,none`.
-# Generative tasks (GSM8K, HumanEval) use `exact_match,…` and `pass@1,…`.
-# We confirmed against gen-1 of run-a4012183: GSM8K's real score was 0.6467
-# under `exact_match,strict-match` but our extractor returned 0.0 because it
-# only knew about `acc,none` / `acc_norm,none`.
+# Per-benchmark lm-eval configuration. The KEY is the public benchmark name
+# stored in DB / shown in UI. The `task` field is the actual lm-eval task id
+# we run — e.g. we evaluate "gsm8k" via the CoT variant `gsm8k_cot` because
+# instruct models score ~0 on the loglikelihood `gsm8k` task; same reason we
+# pick `humaneval_instruct` for instruct-tuned bases. `num_fewshot` follows
+# the canonical evals (ARC=25, HellaSwag=10, MMLU=5, GSM8K-CoT=8, HumanEval=0).
+# `score_keys` is tried in order; first hit wins. `gen_kwargs` and
+# `requires_code_exec` are forwarded to simple_evaluate when present.
+_TASK_CONFIG: dict[str, dict] = {
+    "mmlu": {
+        "task": "mmlu",
+        "num_fewshot": 5,
+        "score_keys": ("acc,none", "acc_norm,none"),
+    },
+    "arc_challenge": {
+        "task": "arc_challenge",
+        "num_fewshot": 25,
+        "score_keys": ("acc_norm,none", "acc,none"),
+    },
+    "hellaswag": {
+        "task": "hellaswag",
+        "num_fewshot": 10,
+        "score_keys": ("acc_norm,none", "acc,none"),
+    },
+    "gsm8k": {
+        "task": "gsm8k_cot",
+        "instruct_task": "gsm8k_cot",
+        "num_fewshot": 8,
+        "score_keys": (
+            "exact_match,flexible-extract",
+            "exact_match,strict-match",
+            "exact_match,none",
+        ),
+        "gen_kwargs": {"max_gen_toks": 1024, "temperature": 0, "do_sample": False},
+    },
+    "humaneval": {
+        "task": "humaneval",
+        "instruct_task": "humaneval_instruct",
+        "num_fewshot": 0,
+        "score_keys": (
+            "pass@1,create_test",
+            "pass@1,none",
+            "pass_at_1,none",
+        ),
+        "gen_kwargs": {"max_gen_toks": 512, "temperature": 0.1, "do_sample": False},
+        "requires_code_exec": True,
+    },
+}
+
+# Back-compat: kept so external callers / older tests that import this name
+# don't break. New code should read `_TASK_CONFIG[name]["score_keys"]`.
 _TASK_METRICS: dict[str, tuple[str, ...]] = {
-    "mmlu": ("acc,none", "acc_norm,none"),
-    "arc_challenge": ("acc_norm,none", "acc,none"),
-    "hellaswag": ("acc_norm,none", "acc,none"),
-    "gsm8k": (
-        "exact_match,strict-match",
-        "exact_match,flexible-extract",
-        "exact_match,none",
-    ),
-    "humaneval": (
-        "pass@1,create_test",
-        "pass@1,none",
-        "pass_at_1,none",
-    ),
+    name: tuple(cfg["score_keys"]) for name, cfg in _TASK_CONFIG.items()
 }
 
 _BASE_SCORES: dict[str, float] = {
@@ -62,6 +95,8 @@ _PROMOTED_GENS: frozenset[int] = frozenset({1, 3, 4})
 class EvalResult:
     scores: dict[str, float] = field(default_factory=dict)
     duration_seconds: float = 0.0
+    harness_version: str = ""
+    stderrs: dict[str, float] = field(default_factory=dict)
 
 
 class EvalBackend(Protocol):
@@ -187,9 +222,16 @@ class LMEvalHarnessBackend:
         adapter_path: str | None,
         config: dict | None,
     ) -> EvalResult:
+        import inspect as _inspect
+
         import lm_eval
 
         from utils.hf_model_id import resolve_hf_base_model_id
+
+        harness_version = getattr(lm_eval, "__version__", "unknown")
+
+        # HumanEval refuses to score without this on the harness side.
+        os.environ.setdefault("HF_ALLOW_CODE_EVAL", "1")
 
         t0 = time.perf_counter()
         cfg_bm = (config or {}).get("base_model")
@@ -197,70 +239,120 @@ class LMEvalHarnessBackend:
             str(cfg_bm).strip() if cfg_bm else None,
             env_fallback=os.environ.get("MODELFORGE_BASE_MODEL"),
         )
+        is_instruct = any(
+            tag in str(base_model).lower() for tag in ("instruct", "chat", "-it")
+        )
 
         quick_eval = str(os.environ.get("MODELFORGE_QUICK_EVAL", "")).lower() in {"1", "true", "yes"}
         if quick_eval:
-            tasks = ["mmlu"]
-            num_fewshot = 0
-            limit = 100
+            bench_names = ["mmlu"]
+            limit_override: int | None = 100
         else:
-            tasks = list(_BENCHMARKS)
-            num_fewshot = 5
-            limit = None
+            bench_names = list(_BENCHMARKS)
+            limit_override = None
+
+        # Allow callers to pin a smaller eval set / sample limit for ablations
+        # without flipping the env var.
+        cfg_limit = (config or {}).get("eval_limit")
+        if isinstance(cfg_limit, int) and cfg_limit > 0:
+            limit_override = cfg_limit
+
+        # simple_evaluate kwargs vary across lm-eval versions; introspect once.
+        sig_params = set(_inspect.signature(lm_eval.simple_evaluate).parameters.keys())
 
         scores: dict[str, float] = {}
+        stderrs: dict[str, float] = {}
         logger.info(
-            "[lm-eval] run=%s gen=%d base=%s adapter=%s quick=%s tasks=%s",
+            "[lm-eval] run=%s gen=%d base=%s adapter=%s instruct=%s quick=%s tasks=%s",
             run_id,
             generation,
             base_model,
             adapter_path,
+            is_instruct,
             quick_eval,
-            tasks,
+            bench_names,
         )
 
-        for task in tasks:
+        for bench in bench_names:
+            cfg = _TASK_CONFIG.get(bench)
+            if not cfg:
+                logger.warning("[lm-eval] unknown benchmark: %s", bench)
+                scores[bench] = 0.0
+                continue
+
+            # Pick the instruct variant of the task when available + applicable
+            # (e.g. humaneval_instruct for chat-tuned bases). `gsm8k_cot` works
+            # for both base + instruct so its instruct_task points at the same id.
+            task_id = cfg.get("instruct_task") if is_instruct and cfg.get("instruct_task") else cfg["task"]
+
             try:
-                model_args = f"pretrained={base_model}"
+                model_args = f"pretrained={base_model},dtype=bfloat16,trust_remote_code=True"
                 if adapter_path:
-                    model_args = f"{model_args},peft={adapter_path}"
+                    model_args += f",peft={adapter_path}"
 
                 kwargs: dict = dict(
                     model="hf",
                     model_args=model_args,
-                    tasks=[task],
-                    num_fewshot=num_fewshot,
-                    batch_size=8,
+                    tasks=[task_id],
+                    num_fewshot=int(cfg["num_fewshot"]),
+                    batch_size="auto",
                     device="cuda",
-                    limit=limit,
+                    limit=limit_override,
                 )
-                # HumanEval executes generated code; lm-eval refuses to run it
-                # without an explicit confirmation flag. Older lm-eval versions
-                # don't accept the kwarg — pass it only when the API supports it.
-                if task == "humaneval":
-                    try:
-                        import inspect as _inspect
-                        if "confirm_run_unsafe_code" in _inspect.signature(
-                            lm_eval.simple_evaluate
-                        ).parameters:
-                            kwargs["confirm_run_unsafe_code"] = True
-                    except Exception:
-                        pass
+
+                # Instruct models need the chat template applied or generative
+                # tasks score near-zero. fewshot_as_multiturn is only meaningful
+                # when a chat template is in play.
+                if is_instruct and "apply_chat_template" in sig_params:
+                    kwargs["apply_chat_template"] = True
+                    if "fewshot_as_multiturn" in sig_params and int(cfg["num_fewshot"]) > 0:
+                        kwargs["fewshot_as_multiturn"] = True
+
+                # Generation kwargs forwarded to generate_until tasks.
+                gen_kwargs = cfg.get("gen_kwargs")
+                if gen_kwargs and "gen_kwargs" in sig_params:
+                    kwargs["gen_kwargs"] = ",".join(f"{k}={v}" for k, v in gen_kwargs.items())
+
+                # Code-execution opt-in for HumanEval-family tasks.
+                if cfg.get("requires_code_exec") and "confirm_run_unsafe_code" in sig_params:
+                    kwargs["confirm_run_unsafe_code"] = True
 
                 results = lm_eval.simple_evaluate(**kwargs)
-                r = (results or {}).get("results", {}).get(task, {}) or {}
-                score = _extract_lm_eval_score(task, r)
+                r = (results or {}).get("results", {}).get(task_id, {}) or {}
+                score = _extract_lm_eval_score(bench, r)
                 logger.info(
-                    "[lm-eval] %s = %.4f (keys=%s)",
-                    task,
+                    "[lm-eval] %s (task=%s) = %.4f (keys=%s)",
+                    bench,
+                    task_id,
                     score,
                     [k for k in r.keys() if not k.endswith("_stderr,none") and "," in k],
                 )
-                scores[task] = float(score)
+                scores[bench] = float(score)
+                # Pull the matching stderr if present. lm-eval reports stderr keys as
+                # "acc_stderr,none", "exact_match_stderr,strict-match", "pass@1_stderr,none"
+                # — i.e. the score key with `_stderr` inserted before the `,`.
+                stderr = 0.0
+                score_keys = _TASK_CONFIG.get(bench, {}).get("score_keys", ())
+                for sk in score_keys:
+                    if "," in sk:
+                        prefix, _, suffix = sk.partition(",")
+                        stderr_key = f"{prefix}_stderr,{suffix}"
+                    else:
+                        stderr_key = f"{sk}_stderr"
+                    val = r.get(stderr_key)
+                    if isinstance(val, (int, float)):
+                        stderr = float(val)
+                        break
+                stderrs[bench] = stderr
             except Exception as exc:
-                logger.exception("[lm-eval] task failed (%s): %s", task, exc)
-                scores[task] = 0.0
+                logger.exception("[lm-eval] task failed (%s/%s): %s", bench, task_id, exc)
+                scores[bench] = 0.0
 
         elapsed = time.perf_counter() - t0
         logger.info("[lm-eval] run=%s gen=%d scores=%s (%.1fs)", run_id, generation, scores, elapsed)
-        return EvalResult(scores=scores, duration_seconds=float(elapsed))
+        return EvalResult(
+            scores=scores,
+            duration_seconds=float(elapsed),
+            harness_version=harness_version,
+            stderrs=stderrs,
+        )

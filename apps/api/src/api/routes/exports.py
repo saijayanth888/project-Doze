@@ -91,6 +91,7 @@ async def evolution_curves(
         raise HTTPException(status_code=404, detail=f"No generations for run {target['run_id']}.")
 
     series: dict[str, list[tuple[int, float]]] = {b: [] for b in BENCH_ORDER}
+    stderr_series: dict[str, list[tuple[int, float]]] = {b: [] for b in BENCH_ORDER}
     avg_pts: list[tuple[int, float]] = []
     for g in gens:
         cs = g.get("child_scores") or {}
@@ -102,12 +103,21 @@ async def evolution_curves(
         if not isinstance(cs, dict):
             continue
         gn = int(g.get("generation") or 0)
+        # Extract stderrs from the generation's data blob.
+        se_raw = g.get("data") or {}
+        if isinstance(se_raw, str):
+            try:
+                se_raw = json.loads(se_raw)
+            except Exception:
+                se_raw = {}
+        se = (se_raw.get("stderrs") or {}) if isinstance(se_raw, dict) else {}
         vals = []
         for b in BENCH_ORDER:
             v = cs.get(b)
             if isinstance(v, (int, float)):
                 series[b].append((gn, float(v)))
                 vals.append(float(v))
+            stderr_series[b].append((gn, float(se[b]) if b in se and isinstance(se[b], (int, float)) else 0.0))
         if vals:
             avg_pts.append((gn, sum(vals) / len(vals)))
 
@@ -123,6 +133,12 @@ async def evolution_curves(
             xs, ys, marker="o", linewidth=1.4, markersize=5,
             color=BENCH_COLORS_HEX[b], label=b,
         )
+        se_pts = stderr_series.get(b) or []
+        if se_pts and len(se_pts) == len(pts):
+            _xs, ses = zip(*se_pts)
+            lower = [y - s for y, s in zip(ys, ses)]
+            upper = [y + s for y, s in zip(ys, ses)]
+            ax.fill_between(xs, lower, upper, color=BENCH_COLORS_HEX[b], alpha=0.15, linewidth=0)
     if avg_pts:
         xs, ys = zip(*avg_pts)
         ax.plot(xs, ys, color="#76b900", linewidth=2.4, marker="D",

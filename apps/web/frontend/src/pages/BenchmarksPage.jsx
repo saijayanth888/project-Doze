@@ -3,6 +3,8 @@ import { C, F, BENCH_COLORS } from '../config/colors';
 import ScoreTrends from '../components/dashboard/ScoreTrends';
 import HeatmapTable from '../components/benchmarks/HeatmapTable';
 import { apiFetch } from '../config/api';
+import { BENCHMARK_INFO } from '../data/benchmarkInfo';
+import InfoTooltip from '../components/shared/InfoTooltip';
 
 const BENCHMARKS = [
   { key: 'mmlu', label: 'MMLU', desc: 'Massive Multitask Language Understanding', weight: 0.25 },
@@ -112,6 +114,7 @@ export default function BenchmarksPage() {
                   }}
                 >
                   {b.label}
+                  <InfoTooltip info={BENCHMARK_INFO[b.key]} size={11} />
                 </span>
               </div>
               <div
