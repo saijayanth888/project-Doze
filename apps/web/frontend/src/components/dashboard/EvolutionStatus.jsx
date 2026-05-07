@@ -22,6 +22,9 @@ import LiveDot from '../shared/LiveDot';
 import Badge from '../shared/Badge';
 import { useToast } from '../../context/ToastContext';
 import ModelPicker from '../shared/ModelPicker';
+import BenchmarkLadder from './BenchmarkLadder';
+import CampaignResultsTable from './CampaignResultsTable';
+import { campaignEta, fmtDuration } from '../../lib/campaignEta';
 
 const STEPS = ['Evaluate', 'Identify', 'Curate', 'Train', 'Compare', 'Decide', 'Record'];
 const MAX_POINTS = 150;
@@ -963,6 +966,43 @@ export default function EvolutionStatus() {
                 </div>
               );
             })()
+        ) : null}
+
+        {campaignActive ? (
+          <>
+            <BenchmarkLadder benchmarks={campaign?.current_benchmarks || []} />
+            <CampaignResultsTable
+              planId={campaign?.plan_id}
+              experiments={campaign?.experiments || []}
+              active={campaignActive}
+            />
+            {(() => {
+              const eta = campaignEta(campaign);
+              if (!eta.paceSeconds && !eta.etaSeconds) return null;
+              return (
+                <div
+                  style={{
+                    fontFamily: F.mono,
+                    fontSize: 11,
+                    color: C.txtM,
+                    marginBottom: 16,
+                    padding: '8px 10px',
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 6,
+                    background: 'rgba(255,255,255,0.02)',
+                  }}
+                >
+                  {eta.etaSeconds
+                    ? `ETA ~${fmtDuration(eta.etaSeconds)} · `
+                    : ''}
+                  {eta.paceSeconds
+                    ? `pace ${fmtDuration(eta.paceSeconds)}/exp`
+                    : 'pace pending'}
+                  {eta.doneByLabel ? ` · Done by ~${eta.doneByLabel}` : ''}
+                </div>
+              );
+            })()}
+          </>
         ) : null}
 
         <div

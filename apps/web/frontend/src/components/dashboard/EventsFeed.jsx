@@ -7,13 +7,18 @@ const POLL_MS = 2000;
 const SOFT_CAP = 80; // most rows we render at once — keeps the DOM tiny.
 
 const PHASE_META = {
-  init:     { color: C.acc,     Icon: Sparkles,       label: 'init' },
-  identify: { color: '#a78bfa', Icon: GitBranch,      label: 'identify' },
-  curate:   { color: '#fb923c', Icon: Database,       label: 'curate' },
-  train:    { color: '#818cf8', Icon: GraduationCap,  label: 'train' },
-  eval:     { color: '#2dd4bf', Icon: FlaskConical,   label: 'eval' },
-  decide:   { color: '#facc15', Icon: Zap,            label: 'decide' },
-  error:    { color: C.danger,  Icon: CircleAlert,    label: 'error' },
+  init:       { color: C.acc,     Icon: Sparkles,       label: 'init' },
+  identify:   { color: '#a78bfa', Icon: GitBranch,      label: 'identify' },
+  curate:     { color: '#fb923c', Icon: Database,       label: 'curate' },
+  train:      { color: '#818cf8', Icon: GraduationCap,  label: 'train' },
+  eval:       { color: '#2dd4bf', Icon: FlaskConical,   label: 'eval' },
+  evaluate:   { color: '#2dd4bf', Icon: FlaskConical,   label: 'benchmark' },
+  decide:     { color: '#facc15', Icon: Zap,            label: 'decide' },
+  ensure:     { color: '#38bdf8', Icon: Sparkles,       label: 'download' },
+  experiment: { color: '#38bdf8', Icon: FlaskConical,   label: 'experiment' },
+  'campaign.started':  { color: C.acc,    Icon: Sparkles, label: 'campaign' },
+  'campaign.complete': { color: C.acc,    Icon: Sparkles, label: 'campaign' },
+  error:      { color: C.danger,  Icon: CircleAlert,    label: 'error' },
 };
 
 function metaFor(phase, level) {
@@ -40,15 +45,27 @@ export default function EventsFeed() {
   const sinceRef = useRef(-1);
   const listRef = useRef(null);
 
-  // Watch /api/evolve/status to discover the active run id. When it changes,
-  // reset the buffer (a new run starts a fresh event timeline).
+  // Watch /api/evolve/status AND /api/campaigns/status. Pick whichever has
+  // an active run; idle ones are ignored. Switching runs clears the buffer.
+  // Idle on both → drop the run id entirely so we stop polling /events.
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
       try {
-        const s = await apiFetch('/api/evolve/status');
+        const [evo, camp] = await Promise.all([
+          apiFetch('/api/evolve/status').catch(() => null),
+          apiFetch('/api/campaigns/status').catch(() => null),
+        ]);
         if (cancelled) return;
-        const rid = s?.run_id || null;
+        const evoRunning = evo?.is_running === true || evo?.status === 'running';
+        const campActive =
+          camp?.status && camp.status !== 'idle' && camp.status !== 'completed' && camp.status !== 'failed';
+        // Prefer campaign run id when a campaign is active (eval-only flow);
+        // fall back to evolve run id when an evolution is running. Idle on
+        // both → null, which stops the events poll below.
+        let rid = null;
+        if (campActive && camp?.run_id) rid = camp.run_id;
+        else if (evoRunning && evo?.run_id) rid = evo.run_id;
         if (rid !== runId) {
           setRunId(rid);
           setEvents([]);

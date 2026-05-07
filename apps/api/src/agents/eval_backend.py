@@ -120,6 +120,8 @@ class EvalBackend(Protocol):
         adapter_path: str | None,
         config: dict | None = None,
         should_stop: Callable[[], bool] | None = None,
+        bench_callback: Callable[[str], None] | None = None,
+        bench_complete_callback: Callable[[str, float, float], None] | None = None,
     ) -> EvalResult: ...
 
 
@@ -138,6 +140,8 @@ class MockEvalBackend:
         adapter_path: str | None,
         config: dict | None = None,
         should_stop: Callable[[], bool] | None = None,
+        bench_callback: Callable[[str], None] | None = None,
+        bench_complete_callback: Callable[[str, float, float], None] | None = None,
     ) -> EvalResult:
         await asyncio.sleep(self._sleep_s)
         if should_stop and should_stop():
@@ -146,6 +150,11 @@ class MockEvalBackend:
         promoted = generation in _PROMOTED_GENS
         scores: dict[str, float] = {}
         for bm in _BENCHMARKS:
+            if bench_callback:
+                try:
+                    bench_callback(bm)
+                except Exception:
+                    pass
             base = _BASE_SCORES[bm]
             delta = _DELTAS[bm]
             value = base + delta * (generation - 1)
@@ -154,6 +163,11 @@ class MockEvalBackend:
             else:
                 value -= 0.006
             scores[bm] = round(value, 4)
+            if bench_complete_callback:
+                try:
+                    bench_complete_callback(bm, scores[bm], 0.01)
+                except Exception:
+                    pass
 
         logger.info(
             "[mock-eval] run=%s gen=%d avg=%.4f",
@@ -220,6 +234,7 @@ class LMEvalHarnessBackend:
         config: dict | None = None,
         should_stop: Callable[[], bool] | None = None,
         bench_callback: Callable[[str], None] | None = None,
+        bench_complete_callback: Callable[[str, float, float], None] | None = None,
     ) -> EvalResult:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
@@ -231,6 +246,7 @@ class LMEvalHarnessBackend:
             config,
             should_stop,
             bench_callback,
+            bench_complete_callback,
         )
 
     def _evaluate_sync(
@@ -241,6 +257,7 @@ class LMEvalHarnessBackend:
         config: dict | None,
         should_stop: Callable[[], bool] | None = None,
         bench_callback: Callable[[str], None] | None = None,
+        bench_complete_callback: Callable[[str, float, float], None] | None = None,
     ) -> EvalResult:
         import inspect as _inspect
 
@@ -380,9 +397,19 @@ class LMEvalHarnessBackend:
                         stderr = float(val)
                         break
                 stderrs[bench] = stderr
+                if bench_complete_callback:
+                    try:
+                        bench_complete_callback(bench, float(score), float(stderr))
+                    except Exception:
+                        pass
             except Exception as exc:
                 logger.exception("[lm-eval] task failed (%s/%s): %s", bench, task_id, exc)
                 scores[bench] = 0.0
+                if bench_complete_callback:
+                    try:
+                        bench_complete_callback(bench, 0.0, 0.0)
+                    except Exception:
+                        pass
 
         elapsed = time.perf_counter() - t0
         logger.info("[lm-eval] run=%s gen=%d scores=%s (%.1fs)", run_id, generation, scores, elapsed)

@@ -36,8 +36,11 @@ _POLL_INTERVAL_SECONDS = 30
 
 
 class CampaignRunner:
+    run_kind: str = "campaign"
+
     def __init__(self) -> None:
         self.active_plan_id: str | None = None
+        self.run_id: str | None = None  # synthetic id "camp-<plan_id>-<short>"
         self.status: str = "idle"  # idle | ensuring | running | paused | stopping
         self.current_experiment_index: int = 0
         self.results: list[dict[str, Any]] = []
@@ -53,6 +56,10 @@ class CampaignRunner:
         self.current_benchmark: str | None = None
         self.current_method: str | None = None
         self.current_started_at: float | None = None
+        self.campaign_started_at: float | None = None
+        # Per-experiment benchmark ladder, reset between experiments. Each entry:
+        # {name, status: "queued"|"running"|"done"|"error", score?, stderr?}
+        self.current_benchmarks: list[dict[str, Any]] = []
         # In-memory ring buffer of campaign events surfaced to the dashboard's
         # Activity Feed via /api/lineage/activity. Capped — only used for the
         # most recent ~100 events; full history lives in postgres.
@@ -68,11 +75,49 @@ class CampaignRunner:
             "message": message,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "plan_id": self.active_plan_id,
+            "run_id": self.run_id,
             **extra,
         }
         self.events.append(evt)
         if len(self.events) > 100:
             self.events = self.events[-100:]
+
+        # Mirror onto the per-run ring buffer so /api/evolve/{run_id}/events
+        # serves campaign events too — same transport as manual evolution runs.
+        if self.run_id:
+            try:
+                from services import run_events
+                run_events.publish(
+                    self.run_id,
+                    phase=self._phase_for(type_),
+                    label=message,
+                    level=("error" if "fail" in type_ or "error" in type_ else "info"),
+                    sub=extra.get("model") or extra.get("benchmark") or extra.get("repo_id"),
+                    metric=(
+                        {"score": extra["score"]} if isinstance(extra.get("score"), (int, float)) else None
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[campaign] run_events publish failed: %s", exc)
+
+        # Publish to event_bus so workflow triggers + the Slack subscriber fire.
+        try:
+            from services.event_bus import bus
+            bus.publish_nowait(f"campaign.{type_}", evt)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[campaign] event_bus publish failed: %s", exc)
+
+    @staticmethod
+    def _phase_for(event_type: str) -> str:
+        if event_type.startswith("model_download"):
+            return "ensure"
+        if event_type.startswith("campaign"):
+            return event_type.replace("campaign_", "campaign.")
+        if event_type.startswith("experiment"):
+            return "experiment"
+        if event_type.startswith("benchmark"):
+            return "evaluate"
+        return event_type
 
     # ── Public lifecycle ────────────────────────────────────────
 
@@ -80,6 +125,15 @@ class CampaignRunner:
         if self.status in ("running", "ensuring"):
             raise ValueError("a campaign is already running")
         self.active_plan_id = plan_id
+        # Synthetic run_id ride: campaigns flow through the same /api/evolve/
+        # {run_id}/events route + run_events ring buffer that manual evolution
+        # uses, so dashboard widgets stay agnostic.
+        self.run_id = f"camp-{plan_id}-{uuid.uuid4().hex[:8]}"
+        try:
+            from services import run_events
+            run_events.reset_run(self.run_id)
+        except Exception:
+            pass
         # Mark "ensuring" so the UI shows the pre-flight phase before any
         # experiment kicks off; the runner flips to "running" once downloads
         # complete.
@@ -89,11 +143,21 @@ class CampaignRunner:
         self.ensure_progress = []
         self.events = []
         self._event_seq = 0
+        self.current_benchmarks = []
+        self.campaign_started_at = time.time()
         self._experiments = list(experiments)
         self._log_event(
             "campaign_started",
             f"Campaign {plan_id} started · {len(experiments)} experiment(s)",
             total_experiments=len(experiments),
+            experiments=[
+                {
+                    "model": e.get("model") or e.get("base_model"),
+                    "method": e.get("method") or ("eval_only" if e.get("eval_only") else "sequential"),
+                    "max_generations": e.get("max_generations"),
+                }
+                for e in experiments
+            ],
         )
 
         # Persist the plan header.
@@ -139,19 +203,42 @@ class CampaignRunner:
             if self.current_started_at is not None
             else None
         )
+        # Whole-campaign elapsed (separate from current_elapsed_seconds which
+        # is current-experiment elapsed).
+        campaign_elapsed = (
+            time.time() - self.campaign_started_at
+            if self.campaign_started_at is not None
+            else None
+        )
+        # ETA: pace-based projection from completed experiments.
+        eta_seconds: float | None = None
+        pace_avg: float | None = None
+        finished = [r for r in self.results if r.get("duration") is not None]
+        if finished:
+            durations = [float(r["duration"]) for r in finished]
+            pace_avg = sum(durations) / len(durations)
+            remaining = max(0, total - (completed + failed))
+            eta_seconds = pace_avg * remaining
         return {
             "status": self.status,
+            "run_id": self.run_id,
+            "run_kind": self.__class__.run_kind,
             "plan_id": self.active_plan_id,
             "current_experiment": self.current_experiment_index,
             "total_experiments": total,
             "completed": completed,
             "failed": failed,
             "results": self.results,
+            "experiments": list(self._experiments),
             "ensure_progress": list(self.ensure_progress),
             "current_model": self.current_model,
             "current_benchmark": self.current_benchmark,
+            "current_benchmarks": list(self.current_benchmarks),
             "current_method": self.current_method,
             "current_elapsed_seconds": elapsed,
+            "campaign_elapsed_seconds": campaign_elapsed,
+            "eta_seconds": eta_seconds,
+            "pace_avg_seconds": pace_avg,
             "events": list(self.events[-20:]),
         }
 
@@ -235,6 +322,15 @@ class CampaignRunner:
             self.current_method = method
             self.current_benchmark = None
             self.current_started_at = time.time()
+            # Seed the benchmark ladder for eval-only experiments so the
+            # dashboard renders the full set up front (queued → running → done).
+            if exp.get("eval_only"):
+                from agents.eval_backend import _BENCHMARKS
+                self.current_benchmarks = [
+                    {"name": b, "status": "queued"} for b in _BENCHMARKS
+                ]
+            else:
+                self.current_benchmarks = []
 
             short = model.split("/")[-1] or model
             self._log_event(
@@ -257,14 +353,36 @@ class CampaignRunner:
                                               scores=result.get("scores", {}),
                                               duration=result.get("duration", 0.0))
                 avg = result.get("avg_score", 0.0)
+                # ETA snapshot for the Slack card based on completed durations.
+                durations = [
+                    float(r.get("duration") or 0.0)
+                    for r in self.results
+                    if r.get("duration") is not None
+                ]
+                pace = (sum(durations) / len(durations)) if durations else 0.0
+                remaining = max(0, total - (idx + 1))
+                eta_seconds = pace * remaining if pace > 0 else None
+                running_completed = sum(
+                    1 for r in self.results if "completed" in (r.get("status") or "")
+                )
+                running_failed = sum(
+                    1 for r in self.results if (r.get("status") or "") == "failed"
+                )
                 self._log_event(
                     "experiment_complete",
                     f"Experiment {idx + 1}/{total} complete · avg={avg:.3f}",
                     experiment_index=idx,
+                    total_experiments=total,
                     model=model,
+                    method=method,
                     avg_score=float(avg),
                     scores=result.get("scores", {}),
+                    stderrs=result.get("stderrs", {}),
                     duration=result.get("duration", 0.0),
+                    pace_avg_seconds=pace,
+                    eta_seconds=eta_seconds,
+                    completed=running_completed,
+                    failed=running_failed,
                 )
                 await self._notify(
                     f"Experiment {idx + 1}/{total} complete · avg={avg:.3f}",
@@ -309,6 +427,8 @@ class CampaignRunner:
                         "experiment_failed",
                         f"Experiment {idx + 1}/{total} FAILED: {str(exc2)[:160]}",
                         experiment_index=idx,
+                        total_experiments=total,
+                        model=model,
                         error=str(exc2)[:500],
                     )
                     await self._notify(
@@ -331,11 +451,48 @@ class CampaignRunner:
         completed = sum(1 for r in self.results if "completed" in (r.get("status") or ""))
         failed = sum(1 for r in self.results if (r.get("status") or "") == "failed")
         plan_id = self.active_plan_id
+        # Build top-results ranking for the Slack summary card.
+        ranked: list[dict[str, Any]] = []
+        for r in self.results:
+            if "completed" not in (r.get("status") or ""):
+                ranked.append({
+                    "model": (r.get("config") or {}).get("model")
+                             or (self._experiments[r.get("index", 0)] if 0 <= r.get("index", 0) < len(self._experiments) else {}).get("model"),
+                    "avg_score": None,
+                    "status": r.get("status"),
+                    "error": r.get("error"),
+                })
+                continue
+            ranked.append({
+                "model": (
+                    self._experiments[r.get("index", 0)]
+                    if 0 <= r.get("index", 0) < len(self._experiments)
+                    else {}
+                ).get("model"),
+                "avg_score": float(r.get("avg_score") or 0.0),
+                "scores": r.get("scores") or {},
+                "duration": float(r.get("duration") or 0.0),
+                "status": "completed",
+            })
+        # Sort succeeded first (by avg desc), then failures.
+        ranked.sort(
+            key=lambda x: (
+                0 if x.get("avg_score") is not None else 1,
+                -(x.get("avg_score") or 0.0),
+            )
+        )
+        total_dur = (
+            time.time() - self.campaign_started_at
+            if self.campaign_started_at is not None
+            else 0.0
+        )
         self.status = "idle"
         self.current_model = None
         self.current_benchmark = None
         self.current_method = None
         self.current_started_at = None
+        self.current_benchmarks = []
+        self.campaign_started_at = None
         if db and getattr(db, "_pool", None) and plan_id:
             async with db._pool.acquire() as conn:
                 await conn.execute(
@@ -349,6 +506,8 @@ class CampaignRunner:
             completed=completed,
             failed=failed,
             total=total,
+            top_results=ranked,
+            total_duration_seconds=total_dur,
         )
         await self._notify(
             f"Campaign complete · {completed}/{total} succeeded · {failed} failed",
@@ -367,9 +526,17 @@ class CampaignRunner:
             t0 = time.perf_counter()
             def _set_bench(name: str) -> None:
                 # bench_callback fires from a worker thread (lm-eval is sync).
-                # Setting attrs is safe; logging an event is just a list append.
+                # Mark the ladder entry "running" and emit a benchmark_started
+                # event so /api/evolve/{run_id}/events sees it.
                 prev = self.current_benchmark
                 self.current_benchmark = name
+                for entry in self.current_benchmarks:
+                    if entry.get("name") == name:
+                        entry["status"] = "running"
+                        break
+                else:
+                    # Unknown bench name — append so the ladder still grows.
+                    self.current_benchmarks.append({"name": name, "status": "running"})
                 if name and name != prev:
                     short = (model or "").split("/")[-1] or model or "?"
                     self._log_event(
@@ -380,6 +547,26 @@ class CampaignRunner:
                         experiment_index=idx,
                     )
 
+            def _bench_complete(name: str, score: float, stderr: float) -> None:
+                # Mark the ladder entry done with the score so the dashboard
+                # ladder reads "✓ mmlu 0.624" instead of just "✓ mmlu".
+                for entry in self.current_benchmarks:
+                    if entry.get("name") == name:
+                        entry["status"] = "error" if score == 0.0 else "done"
+                        entry["score"] = float(score)
+                        entry["stderr"] = float(stderr)
+                        break
+                short = (model or "").split("/")[-1] or model or "?"
+                self._log_event(
+                    "benchmark_complete",
+                    f"Benchmark {name} on {short} = {score:.3f}",
+                    benchmark=name,
+                    model=model,
+                    experiment_index=idx,
+                    score=float(score),
+                    stderr=float(stderr),
+                )
+
             result = await backend.evaluate(
                 run_id=run_id,
                 generation=0,
@@ -388,11 +575,14 @@ class CampaignRunner:
                         if k in ("eval_limit", "limit")}},
                 should_stop=lambda: self.status == "stopping",
                 bench_callback=_set_bench,
+                bench_complete_callback=_bench_complete,
             )
             scores = dict(result.scores or {})
+            stderrs = dict(getattr(result, "stderrs", None) or {})
             avg = sum(scores.values()) / len(scores) if scores else 0.0
             return {
                 "scores": scores,
+                "stderrs": stderrs,
                 "avg_score": float(avg),
                 "duration": float(result.duration_seconds or (time.perf_counter() - t0)),
                 "method": "baseline",

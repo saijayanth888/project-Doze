@@ -114,12 +114,64 @@ class AutomationEngine:
         # re-registering subs each time a workflow is added/updated.
         bus.subscribe("*", self._on_event, name="automation_engine")
 
+        # Wire the campaign Slack dispatcher onto the same bus. Block Kit
+        # cards for campaign_started / experiment_complete / campaign_complete
+        # / experiment_failed / experiment_stopped flow through here.
+        try:
+            from services.campaign_slack import register_campaign_slack_subscriber
+            register_campaign_slack_subscriber(self, bus)
+        except Exception as exc:
+            logger.warning("[automation] campaign Slack subscriber failed to register: %s", exc)
+
+        # Idempotent allow-list migration: append campaign_* event types that
+        # the campaign Slack dispatcher emits with, so a fresh install isn't
+        # silently dropping every campaign card. Existing user-customized
+        # values are preserved (we only add what's missing).
+        try:
+            await self._migrate_campaign_allow_list()
+        except Exception as exc:
+            logger.warning("[automation] campaign allow-list migration failed: %s", exc)
+
         active_cron = sum(1 for w in workflows if w.get("enabled") and w.get("trigger_type") == "cron")
         active_event = sum(1 for w in workflows if w.get("enabled") and w.get("trigger_type") == "event")
         logger.info(
             "[automation] started — %d workflow(s) total, %d cron / %d event active",
             len(workflows), active_cron, active_event,
         )
+
+    async def _migrate_campaign_allow_list(self) -> None:
+        """Append missing ``campaign_*`` event types to the notify allow-list.
+
+        Idempotent — only adds types that aren't already present, never
+        replaces a user's customized list. Empty allow-list ([]) means
+        "allow everything", so we leave it alone in that case.
+        """
+        wanted = (
+            "campaign_started",
+            "campaign_experiment_complete",
+            "campaign_completed",
+            "campaign_failed",
+            "campaign_stopped",
+        )
+        try:
+            row = await self.db.get_automation_settings()
+        except Exception:
+            return
+        if not isinstance(row, dict):
+            return
+        current = list(row.get("notify_event_types") or [])
+        if not current:
+            # Empty list = allow everything; nothing to do.
+            return
+        missing = [t for t in wanted if t not in current]
+        if not missing:
+            return
+        merged = current + missing
+        try:
+            await self.db.update_automation_settings({"notify_event_types": merged})
+            logger.info("[automation] allow-list extended with %s", missing)
+        except Exception as exc:
+            logger.warning("[automation] allow-list update failed: %s", exc)
 
     async def stop(self) -> None:
         if self._scheduler:
