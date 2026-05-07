@@ -194,6 +194,46 @@ class CampaignRunner:
         if self.status in ("running", "paused", "ensuring"):
             self.status = "stopping"
 
+    def force_stop(self) -> dict[str, Any]:
+        """Aggressively reset runner state without waiting for the current
+        benchmark to finish.
+
+        Cooperative stop ``stop()`` only engages at the next benchmark
+        boundary, which can be 5–30 min for some lm-eval tasks. While we
+        wait, Start is disabled and the dashboard shows ``stopping`` —
+        users perceive the system as wedged.
+
+        Force-stop cancels the asyncio campaign task, marks the runner
+        ``idle``, and clears state so a new campaign can start
+        immediately. The underlying lm-eval thread keeps running in the
+        executor pool (Python can't kill threads) but its result is
+        dropped on the floor and the GPU frees once the thread returns.
+        """
+        cancelled = False
+        plan_id = self.active_plan_id
+        if self._task and not self._task.done():
+            try:
+                self._task.cancel()
+                cancelled = True
+            except Exception:
+                pass
+        self.status = "idle"
+        self.current_model = None
+        self.current_benchmark = None
+        self.current_benchmarks = []
+        self.current_method = None
+        self.current_started_at = None
+        self.campaign_started_at = None
+        # Leave run_id, results, ensure_progress, events alone so the
+        # final dashboard snapshot remains readable. They'll be overwritten
+        # when the next campaign starts.
+        self._log_event(
+            "campaign_force_stopped",
+            f"Campaign {plan_id} force-stopped by user — runner reset, lm-eval thread will drain in background",
+            cancelled_task=cancelled,
+        )
+        return {"status": "idle", "task_cancelled": cancelled, "plan_id": plan_id}
+
     def get_status(self) -> dict:
         completed = sum(1 for r in self.results if "completed" in (r.get("status") or ""))
         failed = sum(1 for r in self.results if (r.get("status") or "") == "failed")

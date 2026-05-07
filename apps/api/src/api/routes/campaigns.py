@@ -52,6 +52,18 @@ async def stop_campaign():
     return {"status": "stopping"}
 
 
+@router.post("/force-stop")
+async def force_stop_campaign():
+    """Aggressive stop — cancels the runner task and resets to idle now.
+
+    Use when cooperative ``/stop`` is wedged because lm-eval is mid-benchmark
+    (some benches run 5-30 min). The eval thread keeps running in the
+    background until it naturally returns, but the runner reports idle
+    immediately so a new campaign can start.
+    """
+    return get_campaign_runner().force_stop()
+
+
 @router.get("/{campaign_id}")
 async def get_campaign_route(campaign_id: str):
     cfg = get_campaign(campaign_id)

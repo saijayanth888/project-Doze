@@ -99,7 +99,7 @@ function extractModel(config) {
 }
 
 // ---- Active Campaign Banner ----
-function ActiveCampaignBanner({ status, onPause, onResume, onStop, onExport }) {
+function ActiveCampaignBanner({ status, onPause, onResume, onStop, onForceStop, onExport }) {
   if (!status || status.status === 'idle') return null;
 
   const {
@@ -230,6 +230,7 @@ function ActiveCampaignBanner({ status, onPause, onResume, onStop, onExport }) {
             type="button"
             disabled={st === 'stopping' || st === 'idle'}
             onClick={onStop}
+            title="Cooperative stop — exits at the next benchmark boundary (1–30 min)"
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -249,6 +250,34 @@ function ActiveCampaignBanner({ status, onPause, onResume, onStop, onExport }) {
             <Square size={12} fill="currentColor" />
             Stop
           </button>
+
+          {/* Force-stop appears once cooperative Stop has been issued and
+              we're stuck mid-benchmark (lm-eval can't be preempted from
+              Python). Cancels the asyncio task and resets to idle. */}
+          {st === 'stopping' ? (
+            <button
+              type="button"
+              onClick={onForceStop}
+              title="Force kill — cancels the runner task immediately and resets to idle. The lm-eval thread keeps running in the background until it returns naturally; results are dropped."
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '6px 12px',
+                background: 'rgba(239,68,68,0.18)',
+                color: '#fca5a5',
+                border: '1px solid rgba(239,68,68,0.55)',
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontFamily: F.ui,
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              <Square size={12} fill="currentColor" />
+              Force Stop
+            </button>
+          ) : null}
 
           <button
             type="button"
@@ -703,10 +732,23 @@ export default function CampaignPage() {
   const handleStop = useCallback(async () => {
     try {
       await apiFetch('/api/campaigns/stop', { method: 'POST' });
-      toast.show('Stopping — will exit at the next benchmark boundary (usually 1–10 min).', 'success');
+      toast.show('Stopping — will exit at the next benchmark boundary (usually 1–10 min). Click Force Stop to kill immediately.', 'success');
       pollStatus();
     } catch (err) {
       toast.show(`Failed to stop: ${err.message}`, 'danger');
+    }
+  }, [toast, pollStatus]);
+
+  const handleForceStop = useCallback(async () => {
+    try {
+      const data = await apiFetch('/api/campaigns/force-stop', { method: 'POST' });
+      toast.show(
+        `Force-stopped — runner reset to idle.${data?.task_cancelled ? ' Eval thread will drain in background.' : ''}`,
+        'success',
+      );
+      pollStatus();
+    } catch (err) {
+      toast.show(`Failed to force-stop: ${err.message}`, 'danger');
     }
   }, [toast, pollStatus]);
 
@@ -776,6 +818,7 @@ export default function CampaignPage() {
         onPause={handlePause}
         onResume={handleResume}
         onStop={handleStop}
+        onForceStop={handleForceStop}
         onExport={exportResults}
       />
 
