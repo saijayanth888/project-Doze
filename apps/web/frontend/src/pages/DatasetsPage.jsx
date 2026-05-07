@@ -16,6 +16,7 @@ import {
   getDatasetQuality,
   uploadDataset,
 } from '../config/api';
+import LoadingSkeleton from '../components/shared/LoadingSkeleton';
 
 export default function DatasetsPage() {
   const [list, setList] = useState(null);
@@ -285,7 +286,7 @@ export default function DatasetsPage() {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {loading ? (
-              <div style={{ padding: 10, fontFamily: F.ui, fontSize: 13, color: C.txtM }}>Loading datasets…</div>
+              <LoadingSkeleton rows={4} height={56} />
             ) : ds.length === 0 ? (
               <div style={{ padding: 10, fontFamily: F.ui, fontSize: 13, color: C.txtM, lineHeight: 1.4 }}>
                 No datasets yet — datasets are created during evolution or uploaded manually.

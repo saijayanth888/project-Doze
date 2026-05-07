@@ -33,6 +33,7 @@ import {
   rollbackAdapter,
   serveAdapter,
 } from '../config/api';
+import LoadingSkeleton from '../components/shared/LoadingSkeleton';
 
 const POLL_FAST_MS = 5000;
 const POLL_SLOW_MS = 20000;
@@ -1013,6 +1014,10 @@ export default function AdaptersPage() {
 
   const isLive = evolve?.is_running === true || evolve?.status === 'running';
   const selectedLineage = selected ? lineageById[selected.adapter_id] : null;
+
+  if (data === null) {
+    return <LoadingSkeleton rows={6} height={48} style={{ padding: '8px 0 40px', maxWidth: 1500, margin: '0 auto' }} />;
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: '8px 0 40px', maxWidth: 1500, margin: '0 auto' }}>

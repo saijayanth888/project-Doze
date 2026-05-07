@@ -15,6 +15,9 @@ import {
 } from 'lucide-react';
 import { C, F, BENCH_COLORS } from '../config/colors';
 import { apiFetch } from '../config/api';
+import { BENCHMARK_INFO } from '../data/benchmarkInfo';
+import InfoTooltip from '../components/shared/InfoTooltip';
+import LoadingSkeleton from '../components/shared/LoadingSkeleton';
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -95,7 +98,9 @@ function ScoreBar({ benchmark, score }) {
   const pct = Math.max(0, Math.min(1, Number(score || 0))) * 100;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: F.mono, fontSize: 10, color: C.txtS }}>
-      <span style={{ minWidth: 70, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{benchmark}</span>
+      <span style={{ minWidth: 70, textTransform: 'uppercase', letterSpacing: '0.04em', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        {benchmark}<InfoTooltip info={BENCHMARK_INFO[benchmark]} size={11} />
+      </span>
       <div style={{ flex: 1, height: 6, background: C.bgI, borderRadius: 3, overflow: 'hidden' }}>
         <div style={{ width: `${pct}%`, height: '100%', background: color }} />
       </div>
@@ -365,9 +370,7 @@ export default function HistoryPage() {
           <span style={{ textAlign: 'right' }}>Actions</span>
         </div>
         {loading ? (
-          <div style={{ padding: 24, textAlign: 'center', color: C.txtM, fontFamily: F.ui, fontSize: 13 }}>
-            Loading run history…
-          </div>
+          <LoadingSkeleton rows={5} height={48} style={{ margin: 16 }} />
         ) : err ? (
           <div style={{ padding: 24, textAlign: 'center', color: C.danger, fontFamily: F.mono, fontSize: 12 }}>
             {err}

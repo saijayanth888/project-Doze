@@ -2,13 +2,17 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { C, F, BENCH_COLORS } from '../../config/colors';
 import { apiFetch } from '../../config/api';
+import { BENCHMARK_INFO } from '../../data/benchmarkInfo';
+import InfoTooltip from '../shared/InfoTooltip';
 
 function ScoreBar({ label, value, color }) {
   const pct = Math.round(value * 100);
   return (
     <div style={{ marginBottom: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-        <span style={{ fontFamily: F.mono, fontSize: 10, color: C.txtM }}>{label}</span>
+        <span style={{ fontFamily: F.mono, fontSize: 10, color: C.txtM, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          {label}<InfoTooltip info={BENCHMARK_INFO[label]} size={11} />
+        </span>
         <span style={{ fontFamily: F.mono, fontSize: 11, color: C.txtP, fontWeight: 500 }}>{value.toFixed(3)}</span>
       </div>
       <div style={{ height: 4, background: C.bgE, borderRadius: 2, overflow: 'hidden' }}>

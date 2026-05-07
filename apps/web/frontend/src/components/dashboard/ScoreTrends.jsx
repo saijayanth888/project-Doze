@@ -14,6 +14,8 @@ import {
 import { ArrowDownRight, ArrowRight, ArrowUpRight, Trophy } from 'lucide-react';
 import { C, F, BENCH_COLORS } from '../../config/colors';
 import { apiFetch } from '../../config/api';
+import { BENCHMARK_INFO } from '../../data/benchmarkInfo';
+import InfoTooltip from '../shared/InfoTooltip';
 
 const SCORES_POLL_MS = 5000;
 const TICK_STROKE = C.borderL;
@@ -179,6 +181,7 @@ function BenchCard({ benchmark, color, rows }) {
         >
           <span style={{ width: 6, height: 6, borderRadius: 999, background: color }} />
           {benchmark}
+          <InfoTooltip info={BENCHMARK_INFO[benchmark]} size={11} />
         </span>
         {delta != null ? <DeltaPill delta={delta} fontSize={10} /> : null}
       </div>

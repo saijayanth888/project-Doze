@@ -19,6 +19,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import { C, F } from '../config/colors';
 import { apiFetch } from '../config/api';
+import LoadingSkeleton from '../components/shared/LoadingSkeleton';
 
 // ── Track presentation ────────────────────────────────────────────────────
 
@@ -333,6 +334,7 @@ const STORAGE_KEY = 'forge-history-v1';
 
 export default function ForgeAgentPage() {
   const [tracks, setTracks] = useState([]);
+  const [loadingTracks, setLoadingTracks] = useState(true);
   const [history, setHistory] = useState(() => {
     try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
     catch { return []; }
@@ -351,6 +353,7 @@ export default function ForgeAgentPage() {
       const r = await apiFetch('/api/forge/tracks');
       setTracks(r?.tracks || []);
     } catch { setTracks([]); }
+    finally { setLoadingTracks(false); }
   }, []);
 
   useEffect(() => { loadTracks(); }, [loadTracks]);
@@ -462,7 +465,9 @@ export default function ForgeAgentPage() {
             <RefreshCw size={11} /> Refresh
           </button>
         </div>
-        {tracks.length === 0 ? (
+        {loadingTracks ? (
+          <LoadingSkeleton rows={2} height={120} gap={10} />
+        ) : tracks.length === 0 ? (
           <div style={{ padding: 18, textAlign: 'center', color: C.txtM, fontFamily: F.ui, fontSize: 12 }}>
             No tracks yet — restart the API to seed the 4 defaults.
           </div>
