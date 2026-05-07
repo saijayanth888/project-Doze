@@ -219,6 +219,7 @@ class LMEvalHarnessBackend:
         adapter_path: str | None,
         config: dict | None = None,
         should_stop: Callable[[], bool] | None = None,
+        bench_callback: Callable[[str], None] | None = None,
     ) -> EvalResult:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
@@ -229,6 +230,7 @@ class LMEvalHarnessBackend:
             adapter_path,
             config,
             should_stop,
+            bench_callback,
         )
 
     def _evaluate_sync(
@@ -238,6 +240,7 @@ class LMEvalHarnessBackend:
         adapter_path: str | None,
         config: dict | None,
         should_stop: Callable[[], bool] | None = None,
+        bench_callback: Callable[[str], None] | None = None,
     ) -> EvalResult:
         import inspect as _inspect
 
@@ -297,6 +300,15 @@ class LMEvalHarnessBackend:
             if should_stop and should_stop():
                 logger.info("[lm-eval] run=%s aborting at bench=%s — stop requested", run_id, bench)
                 raise EvalStopped(f"stopped before {bench}")
+
+            # Surface the currently-running benchmark to the campaign runner so
+            # the dashboard can show "Now evaluating: arc_challenge" instead of
+            # appearing frozen for 30 minutes per experiment.
+            if bench_callback:
+                try:
+                    bench_callback(bench)
+                except Exception:
+                    pass
 
             cfg = _TASK_CONFIG.get(bench)
             if not cfg:

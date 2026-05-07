@@ -248,18 +248,29 @@ export default function EvolutionStatus() {
   useEffect(() => {
     if (status.elapsed_seconds != null && Number.isFinite(Number(status.elapsed_seconds))) {
       setElapsedDisplaySeconds(Number(status.elapsed_seconds));
-    } else if (!isRunning) {
+    } else if (!isRunning && !campaignActive) {
       setElapsedDisplaySeconds(0);
     }
-  }, [status.elapsed_seconds, status.run_id, isRunning]);
+  }, [status.elapsed_seconds, status.run_id, isRunning, campaignActive]);
+
+  // When in campaign mode, seed Elapsed from the campaign's per-experiment
+  // clock so the dashboard timer reflects "time on this experiment" rather
+  // than 00:00 or stale evolve-run elapsed.
+  useEffect(() => {
+    if (!campaignActive || isRunning) return;
+    const ce = campaign?.current_elapsed_seconds;
+    if (ce != null && Number.isFinite(Number(ce))) {
+      setElapsedDisplaySeconds(Number(ce));
+    }
+  }, [campaignActive, isRunning, campaign?.current_elapsed_seconds, campaign?.current_experiment]);
 
   useEffect(() => {
-    if (!isRunning) return undefined;
+    if (!isRunning && !campaignActive) return undefined;
     const iv = setInterval(() => {
       setElapsedDisplaySeconds((s) => (Number.isFinite(s) ? s + 1 : 0));
     }, 1000);
     return () => clearInterval(iv);
-  }, [isRunning, status.run_id]);
+  }, [isRunning, campaignActive, status.run_id, campaign?.plan_id, campaign?.current_experiment]);
 
   useEffect(() => {
     let cancelled = false;
@@ -639,7 +650,7 @@ export default function EvolutionStatus() {
           )}
         </div>
 
-        {cfgStrip ? (
+        {cfgStrip && !campaignActive ? (
           <div
             style={{
               fontFamily: F.mono,
@@ -695,6 +706,30 @@ export default function EvolutionStatus() {
                   Campaign{campaign.plan_id ? ` · ${campaign.plan_id}` : ''}
                   {' '}— ✓ {campaign.completed ?? 0} ✗ {campaign.failed ?? 0}
                 </div>
+                {campaign.current_model || campaign.current_benchmark ? (
+                  <div
+                    style={{
+                      fontFamily: F.mono,
+                      fontSize: 12,
+                      color: C.txtP,
+                      marginTop: 8,
+                      padding: '6px 10px',
+                      background: 'rgba(56,189,248,0.06)',
+                      border: '1px solid rgba(56,189,248,0.25)',
+                      borderRadius: 6,
+                      maxWidth: 360,
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    Now:{' '}
+                    {campaign.current_benchmark
+                      ? <strong style={{ color: '#38bdf8' }}>{campaign.current_benchmark}</strong>
+                      : 'starting…'}
+                    {campaign.current_model
+                      ? <> on {String(campaign.current_model).split('/').slice(-1)[0]}</>
+                      : null}
+                  </div>
+                ) : null}
                 {campaign.status === 'ensuring' && Array.isArray(campaign.ensure_progress) && campaign.ensure_progress.length > 0 ? (
                   <div
                     style={{
@@ -755,14 +790,14 @@ export default function EvolutionStatus() {
                 fontFamily: F.mono,
                 fontSize: '3rem',
                 fontWeight: 500,
-                color: isRunning ? C.acc : C.txtM,
+                color: (isRunning || campaignActive) ? C.acc : C.txtM,
                 lineHeight: 1,
               }}
             >
               {formatElapsed(elapsedDisplaySeconds)}
             </div>
           </div>
-          {status.run_id && (
+          {status.run_id && !campaignActive && (
             <div>
               <div
                 style={{
@@ -930,7 +965,14 @@ export default function EvolutionStatus() {
             })()
         ) : null}
 
-        <div style={{ display: 'flex', gap: 0, marginBottom: 16, position: 'relative' }}>
+        <div
+          style={{
+            display: campaignActive ? 'none' : 'flex',
+            gap: 0,
+            marginBottom: 16,
+            position: 'relative',
+          }}
+        >
           <div
             style={{
               position: 'absolute',

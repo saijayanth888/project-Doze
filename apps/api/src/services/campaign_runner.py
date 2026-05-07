@@ -46,6 +46,13 @@ class CampaignRunner:
         # Per-repo pre-flight download state, surfaced via get_status() so the
         # dashboard banner can show live progress while weights download.
         self.ensure_progress: list[dict[str, Any]] = []
+        # Live "what is the runner doing right now" hints. Updated by the eval
+        # backend at each benchmark boundary so the dashboard isn't a black
+        # box during a 30-min experiment.
+        self.current_model: str | None = None
+        self.current_benchmark: str | None = None
+        self.current_method: str | None = None
+        self.current_started_at: float | None = None
 
     # ── Public lifecycle ────────────────────────────────────────
 
@@ -100,6 +107,11 @@ class CampaignRunner:
         completed = sum(1 for r in self.results if "completed" in (r.get("status") or ""))
         failed = sum(1 for r in self.results if (r.get("status") or "") == "failed")
         total = len(self._experiments) or 0
+        elapsed = (
+            time.time() - self.current_started_at
+            if self.current_started_at is not None
+            else None
+        )
         return {
             "status": self.status,
             "plan_id": self.active_plan_id,
@@ -109,6 +121,10 @@ class CampaignRunner:
             "failed": failed,
             "results": self.results,
             "ensure_progress": list(self.ensure_progress),
+            "current_model": self.current_model,
+            "current_benchmark": self.current_benchmark,
+            "current_method": self.current_method,
+            "current_elapsed_seconds": elapsed,
         }
 
     # ── Internals ────────────────────────────────────────────────
@@ -165,6 +181,13 @@ class CampaignRunner:
             self.current_experiment_index = idx
             model = exp.get("model") or exp.get("base_model") or ""
             method = exp.get("method") or ("eval_only" if exp.get("eval_only") else "sequential")
+
+            # Reset live-progress hints at each experiment boundary so the
+            # dashboard reflects the new model immediately, not the old one.
+            self.current_model = model
+            self.current_method = method
+            self.current_benchmark = None
+            self.current_started_at = time.time()
 
             await self._notify(
                 f"Experiment {idx + 1}/{total} starting: {method} on {model.split('/')[-1] or model}",
@@ -234,6 +257,10 @@ class CampaignRunner:
         failed = sum(1 for r in self.results if (r.get("status") or "") == "failed")
         plan_id = self.active_plan_id
         self.status = "idle"
+        self.current_model = None
+        self.current_benchmark = None
+        self.current_method = None
+        self.current_started_at = None
         if db and getattr(db, "_pool", None) and plan_id:
             async with db._pool.acquire() as conn:
                 await conn.execute(
@@ -256,6 +283,9 @@ class CampaignRunner:
             run_id = f"baseline-{uuid.uuid4().hex[:8]}"
             backend = LMEvalHarnessBackend()
             t0 = time.perf_counter()
+            def _set_bench(name: str) -> None:
+                self.current_benchmark = name
+
             result = await backend.evaluate(
                 run_id=run_id,
                 generation=0,
@@ -263,6 +293,7 @@ class CampaignRunner:
                 config={"base_model": model, **{k: v for k, v in exp.items()
                         if k in ("eval_limit", "limit")}},
                 should_stop=lambda: self.status == "stopping",
+                bench_callback=_set_bench,
             )
             scores = dict(result.scores or {})
             avg = sum(scores.values()) / len(scores) if scores else 0.0
