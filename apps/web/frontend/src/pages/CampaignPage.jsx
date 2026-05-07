@@ -110,6 +110,7 @@ function ActiveCampaignBanner({ status, onPause, onResume, onStop, onExport }) {
     completed = 0,
     failed = 0,
     results = [],
+    ensure_progress: ensureProgress = [],
   } = status;
 
   const done = completed + failed;
@@ -298,6 +299,72 @@ function ActiveCampaignBanner({ status, onPause, onResume, onStop, onExport }) {
           {Math.round(progress * 100)}% complete &nbsp;·&nbsp; {etaLabel}
         </div>
       </div>
+
+      {/* Pre-flight HF download progress (ensuring phase) */}
+      {st === 'ensuring' && ensureProgress.length > 0 ? (
+        <div style={{ padding: '8px 0', borderBottom: `1px solid ${C.border}` }}>
+          <div
+            style={{
+              padding: '6px 18px 4px',
+              fontFamily: F.mono,
+              fontSize: 9,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: C.txtM,
+            }}
+          >
+            Pre-flight: downloading model weights ({
+              ensureProgress.filter((e) => e.status === 'done').length
+            } / {ensureProgress.length})
+          </div>
+          {ensureProgress.map((e) => {
+            const ic =
+              e.status === 'done' ? '✓'
+              : e.status === 'downloading' ? '↓'
+              : e.status === 'error' ? '✗'
+              : '·';
+            const col =
+              e.status === 'done' ? '#22c55e'
+              : e.status === 'downloading' ? '#38bdf8'
+              : e.status === 'error' ? '#ef4444'
+              : C.txtM;
+            const mb = e.downloaded_bytes
+              ? ` · ${(e.downloaded_bytes / (1024 * 1024)).toFixed(0)} MB`
+              : '';
+            return (
+              <div
+                key={e.repo_id}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '24px minmax(0,1fr) auto',
+                  gap: 8,
+                  padding: '3px 18px',
+                  fontFamily: F.mono,
+                  fontSize: 11,
+                  color: C.txtS,
+                  alignItems: 'center',
+                }}
+              >
+                <span style={{ color: col, textAlign: 'center', fontWeight: 700 }}>{ic}</span>
+                <span
+                  style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    color: C.txtP,
+                  }}
+                >
+                  {e.repo_id}
+                </span>
+                <span style={{ color: C.txtM, fontSize: 10 }}>
+                  {e.status}{mb}
+                  {e.error ? ` · ${e.error}` : ''}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
 
       {/* Per-experiment rows */}
       {results.length > 0 ? (

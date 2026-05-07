@@ -38,11 +38,14 @@ _POLL_INTERVAL_SECONDS = 30
 class CampaignRunner:
     def __init__(self) -> None:
         self.active_plan_id: str | None = None
-        self.status: str = "idle"  # idle | running | paused | stopping
+        self.status: str = "idle"  # idle | ensuring | running | paused | stopping
         self.current_experiment_index: int = 0
         self.results: list[dict[str, Any]] = []
         self._task: asyncio.Task | None = None
         self._experiments: list[dict] = []
+        # Per-repo pre-flight download state, surfaced via get_status() so the
+        # dashboard banner can show live progress while weights download.
+        self.ensure_progress: list[dict[str, Any]] = []
 
     # ── Public lifecycle ────────────────────────────────────────
 
@@ -56,6 +59,7 @@ class CampaignRunner:
         self.status = "ensuring"
         self.current_experiment_index = 0
         self.results = []
+        self.ensure_progress = []
         self._experiments = list(experiments)
 
         # Persist the plan header.
@@ -104,6 +108,7 @@ class CampaignRunner:
             "completed": completed,
             "failed": failed,
             "results": self.results,
+            "ensure_progress": list(self.ensure_progress),
         }
 
     # ── Internals ────────────────────────────────────────────────
@@ -114,9 +119,18 @@ class CampaignRunner:
         # Pre-flight: ensure every referenced HF repo is cached locally so the
         # campaign can run end-to-end without anyone running `huggingface-cli
         # download` by hand. Failures here abort the campaign cleanly.
+        async def _on_ensure_progress(item: dict) -> None:
+            for entry in self.ensure_progress:
+                if entry.get("repo_id") == item.get("repo_id"):
+                    entry.update(item)
+                    return
+            self.ensure_progress.append(dict(item))
+
         try:
             from services.model_ensure import ensure_all_for_experiments
-            await ensure_all_for_experiments(experiments, notify=self._notify)
+            await ensure_all_for_experiments(
+                experiments, notify=self._notify, progress=_on_ensure_progress
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("[campaign] pre-flight model download failed: %s", exc)
             await self._notify(

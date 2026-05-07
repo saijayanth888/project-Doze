@@ -75,18 +75,39 @@ def repo_ids_for_experiments(experiments: list[dict]) -> list[str]:
     return out
 
 
+def _incomplete_bytes(repo_id: str) -> int:
+    """Sum sizes of any ``*.incomplete`` blobs for ``repo_id`` — best-effort
+    progress for an in-flight ``snapshot_download``."""
+    blobs = _cached_repo_dir(repo_id) / "blobs"
+    if not blobs.is_dir():
+        return 0
+    total = 0
+    for p in blobs.iterdir():
+        if p.suffix == ".incomplete":
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
 async def ensure_hf_repo(
     repo_id: str,
     *,
     notify: Callable[[str, str], Awaitable[None]] | None = None,
+    progress: Callable[[dict], Awaitable[None]] | None = None,
 ) -> None:
     """Download ``repo_id`` into the HF cache if not already present."""
     if is_hf_repo_cached(repo_id):
         logger.info("[ensure] cached: %s", repo_id)
+        if progress:
+            await progress({"repo_id": repo_id, "status": "done", "cached": True})
         return
 
     if notify:
         await notify(f"Downloading {repo_id} to local HF cache…", "⬇️")
+    if progress:
+        await progress({"repo_id": repo_id, "status": "downloading"})
 
     from huggingface_hub import snapshot_download
     from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
@@ -100,18 +121,41 @@ async def ensure_hf_repo(
             token=token,
         )
 
+    # Run snapshot_download in a thread; meanwhile poll the cache directory
+    # for the partial-blob byte count so the dashboard can show live progress.
+    task = asyncio.create_task(asyncio.to_thread(_do))
     try:
-        path = await asyncio.to_thread(_do)
+        while not task.done():
+            if progress:
+                await progress({
+                    "repo_id": repo_id,
+                    "status": "downloading",
+                    "downloaded_bytes": _incomplete_bytes(repo_id),
+                })
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+            except asyncio.TimeoutError:
+                continue
+        path = await task
     except GatedRepoError as exc:
+        if progress:
+            await progress({
+                "repo_id": repo_id, "status": "error",
+                "error": "gated_no_access",
+            })
         raise RuntimeError(
             f"HF repo {repo_id!r} is gated and the configured HF_TOKEN "
             f"doesn't have access. Accept the license at "
             f"https://huggingface.co/{repo_id} and retry."
         ) from exc
     except RepositoryNotFoundError as exc:
+        if progress:
+            await progress({"repo_id": repo_id, "status": "error", "error": "not_found"})
         raise RuntimeError(f"HF repo {repo_id!r} not found") from exc
 
     logger.info("[ensure] downloaded %s -> %s", repo_id, path)
+    if progress:
+        await progress({"repo_id": repo_id, "status": "done"})
     if notify:
         await notify(f"Downloaded {repo_id}", "✅")
 
@@ -120,9 +164,15 @@ async def ensure_all_for_experiments(
     experiments: list[dict],
     *,
     notify: Callable[[str, str], Awaitable[None]] | None = None,
+    progress: Callable[[dict], Awaitable[None]] | None = None,
 ) -> list[str]:
     """Ensure every referenced HF repo is locally cached."""
     repos = repo_ids_for_experiments(experiments)
+    if progress:
+        for r in repos:
+            status = "done" if is_hf_repo_cached(r) else "queued"
+            await progress({"repo_id": r, "status": status, "cached": status == "done"})
+
     missing = [r for r in repos if not is_hf_repo_cached(r)]
     if not missing:
         if notify and repos:
@@ -138,5 +188,5 @@ async def ensure_all_for_experiments(
             "📦",
         )
     for repo_id in missing:
-        await ensure_hf_repo(repo_id, notify=notify)
+        await ensure_hf_repo(repo_id, notify=notify, progress=progress)
     return repos
