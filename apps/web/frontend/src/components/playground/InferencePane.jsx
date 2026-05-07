@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -170,6 +171,7 @@ function TypewriterText({ text, speed = 20 }) {
 }
 
 export default function InferencePane() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [responses, setResponses] = useState({ base: '', champion: '' });
@@ -238,6 +240,40 @@ export default function InferencePane() {
     }
   }, [hydrated, prompt, responses, meta, submitted, adapterId]);
 
+  // Deep-link from ChampionCard / Lineage: /playground?adapter=<id> or
+  // ?compare=base-vs-<id>. Runs after the sessionStorage hydration so it
+  // overrides whatever the previous visit had stickied. Param is consumed
+  // (removed from the URL) so a refresh doesn't keep re-overriding.
+  useEffect(() => {
+    if (!hydrated) return;
+    const adapterParam = searchParams.get('adapter');
+    const compareParam = searchParams.get('compare');
+    let nextAdapter = null;
+    if (adapterParam) {
+      nextAdapter = adapterParam;
+    } else if (compareParam && compareParam.startsWith('base-vs-')) {
+      // Compare-mode toggle isn't wired yet (the pane already always shows
+      // base + champion side by side via /api/infer/compare). Seeding the
+      // adapter is enough — both panes will reflect the selection.
+      nextAdapter = compareParam.slice('base-vs-'.length);
+    }
+    if (nextAdapter) {
+      setAdapterId(nextAdapter);
+      setBadge(nextAdapter);
+    }
+    if (adapterParam || compareParam) {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('adapter');
+          next.delete('compare');
+          return next;
+        },
+        { replace: true }
+      );
+    }
+  }, [hydrated, searchParams, setSearchParams]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -250,15 +286,18 @@ export default function InferencePane() {
         const list = (a.adapters || []).filter((x) => x.has_weights !== false);
         setAdapters(list);
         // Prefer an adapter the user can actually run: registered champion
-        // first, then the first row with weights.
-        let cid = a.champion_id;
-        if (!list.some((x) => x.adapter_id === cid)) {
-          cid = list.find((x) => x.is_champion)?.adapter_id || list[0]?.adapter_id || '';
-        }
-        if (cid) {
-          setAdapterId(cid);
-          setBadge(cid);
-        }
+        // first, then the first row with weights. Skip if the user already
+        // picked one (sessionStorage hydration or ?adapter= deep-link) — we
+        // don't want to clobber their selection.
+        setAdapterId((current) => {
+          if (current) return current;
+          let cid = a.champion_id;
+          if (!list.some((x) => x.adapter_id === cid)) {
+            cid = list.find((x) => x.is_champion)?.adapter_id || list[0]?.adapter_id || '';
+          }
+          if (cid) setBadge(cid);
+          return cid || '';
+        });
       } catch {
         /* ignore */
       }

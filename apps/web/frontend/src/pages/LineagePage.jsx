@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowDownToLine, ArrowUpRight, GitBranch, GitCompare, MessageSquare, Trophy } from 'lucide-react';
 import { BENCH_COLORS, C, F } from '../config/colors';
 import { apiFetch } from '../config/api';
@@ -219,6 +219,7 @@ function GenerationTimelineCard({ gen, isSelected, onSelect, championAdapterId }
 }
 
 export default function LineagePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [tree, setTree] = useState(undefined);
   const [selected, setSelected] = useState(null);
   const [evolve, setEvolve] = useState(null);   // /api/evolve/status — drives polling rate
@@ -276,6 +277,31 @@ export default function LineagePage() {
   useEffect(() => {
     if (!selected && defaultSelected) setSelected(defaultSelected);
   }, [defaultSelected, selected]);
+
+  // Deep-link from ChampionCard "View Lineage" → /lineage?node=<adapter_id>.
+  // The lineage tree exposes nodes by `id` which can be `{run_id}-gen-{N}` (DB)
+  // or the adapter_id directly (registry-backed single-node). Match by exact id
+  // first, then by suffix containing the param, then fall back to the existing
+  // default selection (champion). Param is consumed once applied so a refresh
+  // doesn't keep re-overriding the user's clicks.
+  useEffect(() => {
+    if (!tree?.nodes?.length) return;
+    const nodeParam = searchParams.get('node');
+    if (!nodeParam) return;
+    const exact = tree.nodes.find((n) => n.id === nodeParam);
+    const fuzzy = exact || tree.nodes.find((n) => typeof n.id === 'string' && n.id.includes(nodeParam));
+    if (fuzzy) setSelected(fuzzy);
+    // Always consume the param (even on no-match) so we don't loop and so the
+    // URL is clean for sharing. No-match is a graceful fallback per spec.
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('node');
+        return next;
+      },
+      { replace: true }
+    );
+  }, [tree, searchParams, setSearchParams]);
 
   const baseModel = champion?.base_model || null;
 

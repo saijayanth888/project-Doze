@@ -114,6 +114,7 @@ export default function EvolutionStatus() {
     batch_size: 2,
     custom_dataset_id: '',
     max_samples: 3000,
+    existing_adapter: '',
   });
   const [metrics, setMetrics] = useState([]);
   const [tokensPerSec, setTokensPerSec] = useState(null);
@@ -305,6 +306,24 @@ export default function EvolutionStatus() {
     return () => window.removeEventListener('keydown', onKey);
   }, [modalOpen]);
 
+  // Cross-component bridge: ChampionCard's "Start Next Generation" dispatches
+  // `mf:open-evolution-dialog` so we open the modal pre-filled with the champion's
+  // adapter path. Lives on `window` (not React context) so any component can fire
+  // it without an extra provider.
+  useEffect(() => {
+    const onOpenDialog = (event) => {
+      setStartError(null);
+      const seed = event?.detail?.existing_adapter;
+      if (typeof seed === 'string' && seed.trim()) {
+        setTab('custom');
+        setCustomCfg((c) => ({ ...c, existing_adapter: seed }));
+      }
+      setModalOpen(true);
+    };
+    window.addEventListener('mf:open-evolution-dialog', onOpenDialog);
+    return () => window.removeEventListener('mf:open-evolution-dialog', onOpenDialog);
+  }, []);
+
   useEffect(() => {
     loadOllamaModels();
   }, [loadOllamaModels]);
@@ -481,6 +500,7 @@ export default function EvolutionStatus() {
         if (selectedModel.trim()) body.base_model = selectedModel.trim();
         if (!body.custom_dataset_id) delete body.custom_dataset_id;
         if (body.max_samples == null) delete body.max_samples;
+        if (!body.existing_adapter) delete body.existing_adapter;
         await apiFetch('/api/evolve/start', {
           method: 'POST',
           body: JSON.stringify(body),
@@ -1258,6 +1278,7 @@ export default function EvolutionStatus() {
                   ['batch_size', 'Batch size', 'number'],
                   ['max_samples', 'Max samples', 'number'],
                   ['custom_dataset_id', 'Custom dataset ID (optional)'],
+                  ['existing_adapter', 'Continue from adapter path (optional)'],
                 ].map(([key, label, type]) => (
                   <label key={key} style={{ fontSize: 11, color: C.txtM, fontFamily: F.ui }}>
                     {label}
