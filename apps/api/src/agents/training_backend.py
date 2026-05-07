@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from config.settings import settings
+from utils.lora_targets import get_lora_target_modules
 
 logger = logging.getLogger("modelforge.agents.training")
 
@@ -186,7 +187,10 @@ class LoRATrainingBackend:
         lora_cfg = LoraConfig(
             r=int(config.get("lora_rank", 16)),
             lora_alpha=int(config.get("lora_alpha", 32)),
-            target_modules=list(config.get("target_modules") or ["q_proj", "v_proj", "k_proj", "o_proj"]),
+            target_modules=list(
+                config.get("target_modules")
+                or get_lora_target_modules(base_model)
+            ),
             lora_dropout=float(config.get("lora_dropout", 0.05)),
             bias="none",
             task_type="CAUSAL_LM",

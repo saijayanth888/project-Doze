@@ -60,6 +60,7 @@ def mutate_adapter(
         import torch
         from datasets import Dataset
         from peft import LoraConfig, PeftModel, get_peft_model
+        from utils.lora_targets import get_lora_target_modules
         from transformers import AutoModelForCausalLM, AutoTokenizer
         from trl import SFTConfig, SFTTrainer
 
@@ -122,7 +123,7 @@ def mutate_adapter(
             lora_cfg = LoraConfig(
                 r=int(lora_rank),
                 lora_alpha=int(lora_alpha),
-                target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+                target_modules=get_lora_target_modules(base_id),
                 lora_dropout=0.05,
                 bias="none",
                 task_type="CAUSAL_LM",
