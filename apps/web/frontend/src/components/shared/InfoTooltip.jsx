@@ -33,7 +33,7 @@ export default function InfoTooltip({ info, size = 14 }) {
             border: '1px solid var(--border, #1f2937)',
             borderRadius: 8,
             padding: '12px 14px',
-            width: 300,
+            width: 360,
             zIndex: 1000,
             fontSize: 12,
             lineHeight: 1.5,
@@ -48,6 +48,21 @@ export default function InfoTooltip({ info, size = 14 }) {
           </div>
           {info.description && (
             <div style={{ color: 'var(--text-secondary, #94a3b8)' }}>{info.description}</div>
+          )}
+          {info.when_it_fires && (
+            <div style={{ marginTop: 6, color: 'var(--text-secondary, #cbd5e1)' }}>
+              <strong>When:</strong> {info.when_it_fires}
+            </div>
+          )}
+          {info.what_it_does && (
+            <div style={{ marginTop: 6, color: 'var(--text-secondary, #cbd5e1)' }}>
+              <strong>What it does:</strong> {info.what_it_does}
+            </div>
+          )}
+          {info.side_effects && (
+            <div style={{ marginTop: 6, color: 'var(--color-warning, #f59e0b)' }}>
+              <strong>Side effects:</strong> {info.side_effects}
+            </div>
           )}
           {info.whatItMeasures && (
             <div style={{ marginTop: 6, color: 'var(--text-secondary, #cbd5e1)' }}>
