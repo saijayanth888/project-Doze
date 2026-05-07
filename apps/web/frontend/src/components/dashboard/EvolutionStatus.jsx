@@ -206,15 +206,32 @@ export default function EvolutionStatus() {
 
   const isRunning = status.is_running === true || status.status === 'running';
 
+  // Eval-only campaigns bypass /api/evolve/start, so /api/evolve/status stays
+  // idle while a campaign is busy. Poll the campaign endpoint too so this
+  // widget reflects "something IS happening" instead of falsely showing empty.
+  const [campaign, setCampaign] = useState(null);
+  const campaignActive =
+    !!campaign &&
+    !!campaign.status &&
+    campaign.status !== 'idle' &&
+    campaign.status !== 'completed' &&
+    campaign.status !== 'failed';
+
   const fetchStatus = useCallback(async () => {
     try {
-      const d = await apiFetch('/api/evolve/status');
-      setStatus((prev) => ({
-        ...prev,
-        ...d,
-        status: d.status ?? prev.status,
-        generation: d.generation ?? 0,
-      }));
+      const [d, c] = await Promise.all([
+        apiFetch('/api/evolve/status').catch(() => null),
+        apiFetch('/api/campaigns/status').catch(() => null),
+      ]);
+      if (d) {
+        setStatus((prev) => ({
+          ...prev,
+          ...d,
+          status: d.status ?? prev.status,
+          generation: d.generation ?? 0,
+        }));
+      }
+      setCampaign(c || null);
     } catch {
       /* ignore */
     }
@@ -222,9 +239,10 @@ export default function EvolutionStatus() {
 
   useEffect(() => {
     fetchStatus();
-    const iv = setInterval(fetchStatus, isRunning ? 2000 : 5000);
+    const fast = isRunning || campaignActive;
+    const iv = setInterval(fetchStatus, fast ? 2000 : 5000);
     return () => clearInterval(iv);
-  }, [fetchStatus, isRunning]);
+  }, [fetchStatus, isRunning, campaignActive]);
 
   // Keep the "Elapsed" display ticking smoothly between status polls (running only).
   useEffect(() => {
@@ -596,7 +614,7 @@ export default function EvolutionStatus() {
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {isRunning && <LiveDot />}
+            {(isRunning || campaignActive) && <LiveDot />}
             <span
               style={{
                 fontFamily: F.ui,
@@ -610,7 +628,15 @@ export default function EvolutionStatus() {
               Evolution Status
             </span>
           </div>
-          <Badge type={isRunning ? 'running' : 'idle'}>{isRunning ? 'Running' : 'Idle'}</Badge>
+          {isRunning ? (
+            <Badge type="running">Running</Badge>
+          ) : campaignActive ? (
+            <Badge type="info">
+              Campaign · {String(campaign.status || '').toUpperCase()}
+            </Badge>
+          ) : (
+            <Badge type="idle">Idle</Badge>
+          )}
         </div>
 
         {cfgStrip ? (
@@ -642,7 +668,49 @@ export default function EvolutionStatus() {
             >
               Generation
             </div>
-            {idleNoRun ? (
+            {idleNoRun && campaignActive ? (
+              <div style={{ marginTop: 4 }}>
+                <div
+                  style={{
+                    fontFamily: F.mono,
+                    fontSize: '2rem',
+                    fontWeight: 500,
+                    color: C.txtP,
+                    lineHeight: 1,
+                  }}
+                >
+                  Exp {Math.min((campaign.current_experiment ?? 0) + 1, campaign.total_experiments || 1)} / {campaign.total_experiments || '?'}
+                </div>
+                <div
+                  style={{
+                    fontFamily: F.ui,
+                    fontSize: 12,
+                    color: C.txtM,
+                    marginTop: 6,
+                    lineHeight: 1.5,
+                    maxWidth: 360,
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  Campaign{campaign.plan_id ? ` · ${campaign.plan_id}` : ''}
+                  {' '}— ✓ {campaign.completed ?? 0} ✗ {campaign.failed ?? 0}
+                </div>
+                {campaign.status === 'ensuring' && Array.isArray(campaign.ensure_progress) && campaign.ensure_progress.length > 0 ? (
+                  <div
+                    style={{
+                      fontFamily: F.mono,
+                      fontSize: 11,
+                      color: C.txtS,
+                      marginTop: 4,
+                    }}
+                  >
+                    Pre-flight: {campaign.ensure_progress.filter((e) => e.status === 'done').length}
+                    {' / '}
+                    {campaign.ensure_progress.length} model(s) cached
+                  </div>
+                ) : null}
+              </div>
+            ) : idleNoRun ? (
               <p
                 style={{
                   fontFamily: F.ui,
