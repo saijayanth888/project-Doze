@@ -53,6 +53,26 @@ class CampaignRunner:
         self.current_benchmark: str | None = None
         self.current_method: str | None = None
         self.current_started_at: float | None = None
+        # In-memory ring buffer of campaign events surfaced to the dashboard's
+        # Activity Feed via /api/lineage/activity. Capped — only used for the
+        # most recent ~100 events; full history lives in postgres.
+        self.events: list[dict[str, Any]] = []
+        self._event_seq: int = 0
+
+    def _log_event(self, type_: str, message: str, **extra: Any) -> None:
+        self._event_seq += 1
+        evt = {
+            "id": f"evt-camp-{self._event_seq}",
+            "type": type_,
+            "event": message,
+            "message": message,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "plan_id": self.active_plan_id,
+            **extra,
+        }
+        self.events.append(evt)
+        if len(self.events) > 100:
+            self.events = self.events[-100:]
 
     # ── Public lifecycle ────────────────────────────────────────
 
@@ -67,7 +87,14 @@ class CampaignRunner:
         self.current_experiment_index = 0
         self.results = []
         self.ensure_progress = []
+        self.events = []
+        self._event_seq = 0
         self._experiments = list(experiments)
+        self._log_event(
+            "campaign_started",
+            f"Campaign {plan_id} started · {len(experiments)} experiment(s)",
+            total_experiments=len(experiments),
+        )
 
         # Persist the plan header.
         if db and getattr(db, "_pool", None):
@@ -125,6 +152,7 @@ class CampaignRunner:
             "current_benchmark": self.current_benchmark,
             "current_method": self.current_method,
             "current_elapsed_seconds": elapsed,
+            "events": list(self.events[-20:]),
         }
 
     # ── Internals ────────────────────────────────────────────────
@@ -136,11 +164,30 @@ class CampaignRunner:
         # campaign can run end-to-end without anyone running `huggingface-cli
         # download` by hand. Failures here abort the campaign cleanly.
         async def _on_ensure_progress(item: dict) -> None:
+            prev_status: str | None = None
             for entry in self.ensure_progress:
                 if entry.get("repo_id") == item.get("repo_id"):
+                    prev_status = entry.get("status")
                     entry.update(item)
-                    return
-            self.ensure_progress.append(dict(item))
+                    break
+            else:
+                self.ensure_progress.append(dict(item))
+            new_status = item.get("status")
+            repo = item.get("repo_id")
+            # Only log at state transitions to avoid spamming events on every
+            # 2 s byte-poll while a download is in flight.
+            if repo and new_status and new_status != prev_status:
+                if new_status == "downloading":
+                    self._log_event("model_download_started", f"Downloading {repo}", repo_id=repo)
+                elif new_status == "done":
+                    if not item.get("cached"):
+                        self._log_event("model_download_complete", f"Downloaded {repo}", repo_id=repo)
+                elif new_status == "error":
+                    self._log_event(
+                        "model_download_error",
+                        f"Download failed: {repo} ({item.get('error', '')})",
+                        repo_id=repo,
+                    )
 
         try:
             from services.model_ensure import ensure_all_for_experiments
@@ -189,8 +236,16 @@ class CampaignRunner:
             self.current_benchmark = None
             self.current_started_at = time.time()
 
+            short = model.split("/")[-1] or model
+            self._log_event(
+                "experiment_started",
+                f"Experiment {idx + 1}/{total} · {method} on {short}",
+                experiment_index=idx,
+                model=model,
+                method=method,
+            )
             await self._notify(
-                f"Experiment {idx + 1}/{total} starting: {method} on {model.split('/')[-1] or model}",
+                f"Experiment {idx + 1}/{total} starting: {method} on {short}",
                 "🧪",
             )
             await self._db_upsert_result(db, idx, exp, status="running", started=True)
@@ -202,6 +257,15 @@ class CampaignRunner:
                                               scores=result.get("scores", {}),
                                               duration=result.get("duration", 0.0))
                 avg = result.get("avg_score", 0.0)
+                self._log_event(
+                    "experiment_complete",
+                    f"Experiment {idx + 1}/{total} complete · avg={avg:.3f}",
+                    experiment_index=idx,
+                    model=model,
+                    avg_score=float(avg),
+                    scores=result.get("scores", {}),
+                    duration=result.get("duration", 0.0),
+                )
                 await self._notify(
                     f"Experiment {idx + 1}/{total} complete · avg={avg:.3f}",
                     "✅",
@@ -213,6 +277,11 @@ class CampaignRunner:
                     logger.info("[campaign] exp %d stopped by user request", idx + 1)
                     self.results.append({"index": idx, "status": "stopped"})
                     await self._db_finish_result(db, idx, status="failed", error="stopped by user")
+                    self._log_event(
+                        "experiment_stopped",
+                        f"Experiment {idx + 1}/{total} stopped by user",
+                        experiment_index=idx,
+                    )
                     await self._notify(
                         f"Experiment {idx + 1}/{total} stopped by user", "🛑",
                     )
@@ -236,6 +305,12 @@ class CampaignRunner:
                     logger.exception("[campaign] exp %d retry failed: %s", idx + 1, exc2)
                     self.results.append({"index": idx, "status": "failed", "error": str(exc2)})
                     await self._db_finish_result(db, idx, status="failed", error=str(exc2))
+                    self._log_event(
+                        "experiment_failed",
+                        f"Experiment {idx + 1}/{total} FAILED: {str(exc2)[:160]}",
+                        experiment_index=idx,
+                        error=str(exc2)[:500],
+                    )
                     await self._notify(
                         f"Experiment {idx + 1}/{total} FAILED after retry: {str(exc2)[:160]}",
                         "🔴",
@@ -268,6 +343,13 @@ class CampaignRunner:
                     "completed" if completed + failed == total else "stopped",
                     plan_id,
                 )
+        self._log_event(
+            "campaign_complete",
+            f"Campaign {plan_id} complete · {completed}/{total} succeeded · {failed} failed",
+            completed=completed,
+            failed=failed,
+            total=total,
+        )
         await self._notify(
             f"Campaign complete · {completed}/{total} succeeded · {failed} failed",
             "🏁",
@@ -284,7 +366,19 @@ class CampaignRunner:
             backend = LMEvalHarnessBackend()
             t0 = time.perf_counter()
             def _set_bench(name: str) -> None:
+                # bench_callback fires from a worker thread (lm-eval is sync).
+                # Setting attrs is safe; logging an event is just a list append.
+                prev = self.current_benchmark
                 self.current_benchmark = name
+                if name and name != prev:
+                    short = (model or "").split("/")[-1] or model or "?"
+                    self._log_event(
+                        "benchmark_started",
+                        f"Benchmark {name} on {short}",
+                        benchmark=name,
+                        model=model,
+                        experiment_index=idx,
+                    )
 
             result = await backend.evaluate(
                 run_id=run_id,

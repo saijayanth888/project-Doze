@@ -384,12 +384,41 @@ async def _fallback_activity_from_run_and_registry(
     return out[:8]
 
 
+def _campaign_events_for_activity_feed() -> list[dict]:
+    """In-memory campaign events, shaped to match the activity-feed schema.
+
+    Surfaces every campaign lifecycle moment (start, pre-flight downloads,
+    experiment start/complete/fail, per-benchmark transitions, finish) so the
+    dashboard's Activity Feed shows live action during a campaign run — the
+    eval-only path doesn't write generations rows, so this is the only place
+    that data exists.
+    """
+    try:
+        from services.campaign_runner import get_campaign_runner
+    except Exception:
+        return []
+    runner = get_campaign_runner()
+    out: list[dict] = []
+    for evt in list(runner.events):
+        plan_id = evt.get("plan_id")
+        out.append({
+            "id": evt.get("id"),
+            "type": evt.get("type") or "campaign",
+            "event": evt.get("message"),
+            "message": evt.get("message"),
+            "generation": 0,
+            "run_id": plan_id,
+            "timestamp": evt.get("timestamp"),
+        })
+    return out
+
+
 @router.get("/activity", response_model=list[dict[str, Any]])
 async def get_activity_feed(
     db: LineageDB = Depends(get_db),
     registry: ModelRegistry = Depends(get_registry),
 ) -> list[dict]:
-    """Return recent evolution-related activity (generations, else run status + registry snapshot)."""
+    """Return recent activity: generations + campaign events + run/registry fallback."""
     generations: list[dict] = []
     try:
         generations = await db.get_all_generations()
@@ -397,7 +426,12 @@ async def get_activity_feed(
         logger.warning("DB unavailable for activity feed: %s", exc)
         generations = []
 
-    if generations:
-        return _events_from_generations(generations)
+    gen_events = _events_from_generations(generations) if generations else []
+    campaign_events = _campaign_events_for_activity_feed()
+
+    merged = gen_events + campaign_events
+    if merged:
+        merged.sort(key=lambda e: str(e.get("timestamp") or ""), reverse=True)
+        return merged[:20]
 
     return await _fallback_activity_from_run_and_registry(db, registry)

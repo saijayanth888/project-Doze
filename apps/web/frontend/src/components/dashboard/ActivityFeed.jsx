@@ -113,6 +113,19 @@ export default function ActivityFeed() {
     if (type === 'registry_snapshot') return { icon: '📁', color: C.txtM };
     if (type === 'live_run') return { icon: '◉', color: C.acc };
 
+    // Campaign-runner events (eval-only baselines bypass the lineage DB so
+    // these are the only signal the activity feed has during a campaign).
+    if (type === 'campaign_started') return { icon: '🚀', color: C.info ?? C.ind };
+    if (type === 'campaign_complete') return { icon: '🏁', color: C.acc };
+    if (type === 'experiment_started') return { icon: '🧪', color: C.ind };
+    if (type === 'experiment_complete') return { icon: '✅', color: C.acc };
+    if (type === 'experiment_failed') return { icon: '🔴', color: C.danger };
+    if (type === 'experiment_stopped') return { icon: '🛑', color: C.warning };
+    if (type === 'benchmark_started') return { icon: '📏', color: C.txtS };
+    if (type === 'model_download_started') return { icon: '⬇️', color: C.info ?? C.ind };
+    if (type === 'model_download_complete') return { icon: '📦', color: C.acc };
+    if (type === 'model_download_error') return { icon: '⚠️', color: C.danger };
+
     return { icon: '•', color: C.txtS };
   };
 
