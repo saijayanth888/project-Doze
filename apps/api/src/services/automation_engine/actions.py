@@ -474,6 +474,154 @@ class Wait(Action):
         return ActionResult(message=f"Waited {seconds}s", output={"seconds": seconds})
 
 
+class SystemMetrics(Action):
+    """Hourly host-vitals snapshot for the phone-readable Slack dashboard.
+
+    Collects CPU%, DRAM, GPU util/VRAM/temp, disk usage at the data root, and
+    (optionally) active-campaign progress, then posts a Block-Kit card via
+    ``engine.notify_blocks``. The card is intentionally simple — at-a-glance
+    on a phone lock screen is the point. Designed to be triggered hourly via
+    the seeded "System Metrics Post" workflow, but works fine as an ad-hoc
+    debug step too.
+    """
+
+    kind = "system.metrics"
+    label = "Post system metrics to Slack"
+    description = (
+        "Snapshot CPU, RAM, GPU, disk, and active-campaign status, then post a "
+        "compact Block-Kit card to Slack. Use with a cron trigger for a phone-"
+        "readable health feed."
+    )
+    schema = [
+        {"name": "include_gpu", "type": "boolean", "label": "Include GPU stats", "default": True},
+        {"name": "include_disk", "type": "boolean", "label": "Include disk usage", "default": True},
+        {"name": "include_campaign", "type": "boolean", "label": "Include active campaign",
+         "default": True,
+         "help": "Show the running campaign's experiment + benchmark progress."},
+        {"name": "event_type", "type": "string", "label": "Event tag", "default": "system_metrics",
+         "help": "Used for the per-event allow-list. Leave default unless you want to filter."},
+    ]
+
+    async def execute(self, *, config, context, engine):
+        metrics: dict[str, Any] = {}
+
+        # ── CPU + DRAM via psutil ────────────────────────────────
+        try:
+            import psutil
+            # cpu_percent(interval=None) returns the avg since the last call, so
+            # the first call after process boot returns 0.0. A short blocking
+            # sample (0.3s) gives a useful reading without holding the loop.
+            metrics["cpu_percent"] = float(
+                await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: psutil.cpu_percent(interval=0.3)
+                )
+            )
+            vm = psutil.virtual_memory()
+            metrics["ram_total_gb"] = round(vm.total / 1e9, 2)
+            metrics["ram_used_gb"] = round(vm.used / 1e9, 2)
+            metrics["ram_avail_gb"] = round(vm.available / 1e9, 2)
+            metrics["ram_percent"] = float(vm.percent)
+        except Exception as exc:
+            logger.warning("[system.metrics] psutil read failed: %s", exc)
+
+        # ── GPU via the same helper /api/system/gpu uses ─────────
+        if bool(config.get("include_gpu", True)):
+            try:
+                from utils.gpu import get_gpu_status
+                g = get_gpu_status() or {}
+                # Reshape into the dict slack_blocks_health.system_health expects.
+                metrics["gpu"] = {
+                    "name": g.get("gpu_name"),
+                    "vram_total_gb": g.get("vram_total_gb"),
+                    "vram_used_gb": g.get("vram_used_gb"),
+                    "util_percent": g.get("util_percent"),
+                    "temp_celsius": g.get("temp_celsius"),
+                    "unified_memory": bool(g.get("unified_memory")),
+                }
+                # On unified-memory hosts (Spark GB10), surface the unified figures
+                # under a sane RAM label too — the card already shows VRAM as
+                # "unified mem" and the CPU/RAM row shows the system-RAM picture.
+            except Exception as exc:
+                logger.warning("[system.metrics] gpu read failed: %s", exc)
+
+        # ── Disk usage at the data root ──────────────────────────
+        if bool(config.get("include_disk", True)):
+            try:
+                root = settings.resolve_data_root()
+                du = await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: shutil.disk_usage(str(root))
+                )
+                used = du.total - du.free
+                pct = (used / du.total * 100) if du.total else None
+                metrics["disk"] = {
+                    "data_root": str(root),
+                    "total_gb": round(du.total / 1e9, 1),
+                    "used_gb": round(used / 1e9, 1),
+                    "free_gb": round(du.free / 1e9, 1),
+                    "percent": round(pct, 1) if pct is not None else None,
+                }
+            except Exception as exc:
+                logger.warning("[system.metrics] disk read failed: %s", exc)
+
+        # ── Active campaign / dashboard run snapshot ─────────────
+        if bool(config.get("include_campaign", True)):
+            try:
+                from services.campaign_runner import get_campaign_runner
+                cr = get_campaign_runner().get_status() or {}
+                # Whole-campaign elapsed lives under campaign_elapsed_seconds.
+                elapsed_h = None
+                ces = cr.get("campaign_elapsed_seconds")
+                if isinstance(ces, (int, float)) and ces > 0:
+                    elapsed_h = round(float(ces) / 3600.0, 2)
+                metrics["campaign"] = {
+                    "status": cr.get("status"),
+                    "plan_id": cr.get("plan_id"),
+                    "name": cr.get("plan_id"),
+                    "run_id": cr.get("run_id"),
+                    "current_experiment": cr.get("current_experiment"),
+                    "total_experiments": cr.get("total_experiments"),
+                    "current_model": cr.get("current_model"),
+                    "current_benchmark": cr.get("current_benchmark"),
+                    "elapsed_h": elapsed_h,
+                }
+            except Exception as exc:
+                logger.warning("[system.metrics] campaign read failed: %s", exc)
+
+        # Hostname so multi-host setups can tell the cards apart.
+        try:
+            import socket
+            metrics["host"] = socket.gethostname()
+        except Exception:
+            metrics["host"] = "unknown"
+
+        # ── Build + send Block-Kit message ───────────────────────
+        try:
+            from services.slack_blocks_health import system_health
+            text, blocks = system_health(metrics)
+        except Exception as exc:
+            return ActionResult(status="error", error=str(exc),
+                                message="Failed to build system metrics blocks")
+
+        event_type = str(config.get("event_type") or "system_metrics") or None
+        try:
+            await engine.notify_blocks(text, blocks, event_type=event_type,
+                                       log_message=text)
+        except Exception as exc:
+            return ActionResult(status="error", error=str(exc),
+                                message="Slack delivery failed")
+
+        return ActionResult(
+            message=f"Posted system metrics ({event_type})",
+            output={
+                "sent": True,
+                "event_type": event_type,
+                "cpu_percent": metrics.get("cpu_percent"),
+                "ram_percent": metrics.get("ram_percent"),
+                "metrics": metrics,
+            },
+        )
+
+
 # ── Registry ───────────────────────────────────────────────────────────
 
 _ALL_ACTIONS: list[type[Action]] = [
@@ -485,6 +633,7 @@ _ALL_ACTIONS: list[type[Action]] = [
     CleanupAdapters,
     DriftCheck,
     HealthCheck,
+    SystemMetrics,
     Wait,
 ]
 

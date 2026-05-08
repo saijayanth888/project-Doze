@@ -141,6 +141,29 @@ DEFAULT_WORKFLOWS: list[dict[str, Any]] = [
             {"kind": "cleanup.adapters", "config": {"keep_days": 7}},
         ],
     },
+    {
+        "name": "System Metrics Post",
+        "description": (
+            "Top-of-the-hour CPU / DRAM / GPU / disk / active-campaign snapshot to "
+            "Slack — phone-readable health feed for operators away from the dashboard."
+        ),
+        "kind": "system",
+        "enabled": True,
+        "trigger_type": "cron",
+        "trigger_config": {"cron": "0 * * * *"},
+        "condition": None,
+        "actions": [
+            {
+                "kind": "system.metrics",
+                "config": {
+                    "include_gpu": True,
+                    "include_disk": True,
+                    "include_campaign": True,
+                    "event_type": "system_metrics",
+                },
+            },
+        ],
+    },
     # ── Event-driven examples (off by default — show users the shape) ──
     {
         "name": "Champion-Promoted Slack Ping",
