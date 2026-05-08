@@ -268,7 +268,7 @@ function ActiveCampaignBanner({ status, onPause, onResume, onStop, onForceStop, 
             type="button"
             disabled={st === 'stopping' || st === 'idle'}
             onClick={onStop}
-            title="Cooperative stop — exits at the next benchmark boundary (1–30 min)"
+            title="Stop — exits at the next benchmark boundary, or auto-force-stops after 60s if still pending"
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -770,7 +770,7 @@ export default function CampaignPage() {
   const handleStop = useCallback(async () => {
     try {
       await apiFetch('/api/campaigns/stop', { method: 'POST' });
-      toast.show('Stopping — will exit at the next benchmark boundary (usually 1–10 min). Click Force Stop to kill immediately.', 'success');
+      toast.show('Stopping — will exit at the next benchmark boundary, or auto-force-stop after 60s if still pending. Click Force Stop to kill immediately.', 'success');
       pollStatus();
     } catch (err) {
       toast.show(`Failed to stop: ${err.message}`, 'danger');

@@ -8,14 +8,181 @@ same shape during local dev as in production.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from collections.abc import Callable
 from typing import Protocol
 
 logger = logging.getLogger("modelforge.agents.eval")
+
+# ── In-flight eval abort signal ──────────────────────────────────
+# lm-eval runs as a sync call inside a thread-pool executor; Python can't kill
+# threads. To make force_stop actually interrupt the eval (not just mark the
+# runner idle while the thread keeps churning), we set this event and the
+# forward pre-hook registered on the loaded model raises EvalStopped on the
+# next batch — typically <1s response time.
+_eval_abort_event = threading.Event()
+
+
+def request_eval_abort() -> None:
+    """Signal the active eval thread to bail at the next model forward call.
+
+    Called by campaign_runner.force_stop() so the GPU is released promptly
+    instead of waiting for lm-eval to finish a 30-min MMLU sweep on its own.
+    Safe to call when no eval is running — the next eval will clear the flag
+    in its setup.
+    """
+    _eval_abort_event.set()
+
+
+def clear_eval_abort() -> None:
+    _eval_abort_event.clear()
+
+
+# ── Eval subprocess runner ──────────────────────────────────────
+_EVAL_WORKER_SCRIPT = "/app/src/scripts/eval_worker.py"
+
+
+async def run_eval_subprocess(
+    *,
+    model: str,
+    adapter_path: str | None = None,
+    benchmarks: list[str] | None = None,
+    limit: int | None = None,
+    batch_size: str | None = None,
+    on_benchmark_started: Callable[[str], None] | None = None,
+    on_benchmark_complete: Callable[[str, float, float], None] | None = None,
+    run_id: str | None = None,
+    proc_holder: list | None = None,
+) -> dict:
+    """Spawn eval_worker.py and return its parsed result dict.
+
+    Module-level helper used by LMEvalHarnessBackend.evaluate() (covers EPT
+    and sequential evolution) and by CampaignRunner._run_eval_subprocess
+    (campaign baseline). Subprocess isolation guarantees CUDA memory is
+    fully reclaimed on worker exit — see project_dgx_freeze_fingerprint
+    memory for why in-process gc + cuda.empty_cache() leak 1-5 GB per call.
+
+    Callbacks fire as the worker emits JSONL events on stdout. proc_holder,
+    if provided, is appended with the spawned process so the caller can
+    SIGTERM it from elsewhere (force_stop path).
+    """
+    bench_list = list(benchmarks) if benchmarks else list(_BENCHMARKS)
+    benchmarks_arg = ",".join(bench_list)
+    rid = run_id or f"eval-{int(time.time() * 1000)}"
+    output_path = f"/tmp/eval-{rid}.json"
+
+    cmd = [
+        "python",
+        _EVAL_WORKER_SCRIPT,
+        "--model", model,
+        "--output", output_path,
+        "--benchmarks", benchmarks_arg,
+    ]
+    if adapter_path:
+        cmd.extend(["--adapter", adapter_path])
+    if isinstance(limit, int) and limit > 0:
+        cmd.extend(["--limit", str(limit)])
+    if batch_size:
+        cmd.extend(["--batch-size", str(batch_size)])
+
+    logger.info("[eval-subprocess] spawn: %s", " ".join(cmd))
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    if proc_holder is not None:
+        proc_holder.append(proc)
+
+    async def _consume_stdout() -> None:
+        assert proc.stdout is not None
+        while True:
+            line_bytes = await proc.stdout.readline()
+            if not line_bytes:
+                return
+            line = line_bytes.decode(errors="replace").rstrip()
+            if not line:
+                continue
+            if not line.startswith("EVENT: "):
+                logger.info("[eval-subprocess stdout] %s", line)
+                continue
+            try:
+                evt = json.loads(line[7:])
+            except Exception:
+                logger.debug("[eval-subprocess] non-JSON event: %s", line)
+                continue
+            et = evt.get("event")
+            if et == "benchmark_started" and on_benchmark_started is not None:
+                try:
+                    on_benchmark_started(evt.get("benchmark"))
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("[eval-subprocess] on_benchmark_started: %s", exc)
+            elif et == "benchmark_complete" and on_benchmark_complete is not None:
+                try:
+                    on_benchmark_complete(
+                        evt.get("benchmark"),
+                        float(evt.get("score") or 0.0),
+                        float(evt.get("stderr") or 0.0),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("[eval-subprocess] on_benchmark_complete: %s", exc)
+            elif et in ("worker_started", "model_loaded", "worker_complete", "worker_error"):
+                logger.info("[eval-subprocess] %s: %s", et, {k: v for k, v in evt.items() if k != "event"})
+
+    async def _consume_stderr() -> None:
+        assert proc.stderr is not None
+        while True:
+            line_bytes = await proc.stderr.readline()
+            if not line_bytes:
+                return
+            line = line_bytes.decode(errors="replace").rstrip()
+            if line:
+                logger.info("[eval-subprocess stderr] %s", line)
+
+    try:
+        await asyncio.gather(
+            _consume_stdout(),
+            _consume_stderr(),
+            proc.wait(),
+        )
+    except asyncio.CancelledError:
+        if proc.returncode is None:
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[eval-subprocess] terminate on cancel: %s", exc)
+        raise
+
+    rc = proc.returncode
+    if rc not in (0, 3):
+        try:
+            os.unlink(output_path)
+        except OSError:
+            pass
+        raise RuntimeError(f"eval-worker exited with code {rc}")
+
+    try:
+        with open(output_path) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"eval-worker output unreadable: {exc}") from exc
+    finally:
+        try:
+            os.unlink(output_path)
+        except OSError:
+            pass
 
 _BENCHMARKS: tuple[str, ...] = ("mmlu", "arc_challenge", "hellaswag", "gsm8k", "humaneval")
 
@@ -236,17 +403,59 @@ class LMEvalHarnessBackend:
         bench_callback: Callable[[str], None] | None = None,
         bench_complete_callback: Callable[[str, float, float], None] | None = None,
     ) -> EvalResult:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None,
-            self._evaluate_sync,
-            run_id,
-            generation,
-            adapter_path,
-            config,
-            should_stop,
-            bench_callback,
-            bench_complete_callback,
+        """Evaluate a model in a fresh subprocess.
+
+        Subprocess isolation is required on the DGX Spark unified-memory
+        architecture: in-process gc + cuda.empty_cache() leak 1-5 GB per
+        model, which after 4-5 evals freezes the host (NVRM
+        `_memdescAllocInternal` OOM, see project_dgx_freeze_fingerprint
+        memory). Process exit reclaims everything atomically.
+
+        Callers (EPT, sequential evolution, campaign_runner) get the same
+        protocol: scores dict + stderrs + duration. `should_stop` is checked
+        once at the start; mid-eval cancellation requires SIGTERM via the
+        caller (see CampaignRunner.force_stop). bench_callback / bench_
+        complete_callback are forwarded as the worker emits JSONL events.
+        """
+        if should_stop and should_stop():
+            raise EvalStopped("stopped before evaluate()")
+
+        from utils.hf_model_id import resolve_hf_base_model_id
+
+        cfg = config or {}
+        cfg_bm = cfg.get("base_model")
+        base_model = resolve_hf_base_model_id(
+            str(cfg_bm).strip() if cfg_bm else None,
+            env_fallback=os.environ.get("MODELFORGE_BASE_MODEL"),
+        )
+
+        # Pick benchmark set from config (EPT uses `eval_benchmarks`),
+        # falling back to the canonical 5-task sweep.
+        bench_list = (
+            cfg.get("eval_benchmarks")
+            or cfg.get("benchmarks")
+            or list(_BENCHMARKS)
+        )
+        if not isinstance(bench_list, list):
+            bench_list = list(_BENCHMARKS)
+
+        eval_limit = cfg.get("eval_limit") or cfg.get("limit")
+
+        result_dict = await run_eval_subprocess(
+            model=base_model,
+            adapter_path=adapter_path,
+            benchmarks=bench_list,
+            limit=int(eval_limit) if isinstance(eval_limit, int) and eval_limit > 0 else None,
+            on_benchmark_started=bench_callback,
+            on_benchmark_complete=bench_complete_callback,
+            run_id=run_id,
+        )
+
+        return EvalResult(
+            scores=dict(result_dict.get("scores") or {}),
+            stderrs=dict(result_dict.get("stderrs") or {}),
+            duration_seconds=float(result_dict.get("duration_seconds") or 0.0),
+            harness_version=str(result_dict.get("harness_version") or ""),
         )
 
     def _evaluate_sync(
@@ -267,16 +476,24 @@ class LMEvalHarnessBackend:
         finally:
             # Release allocator state between evals so a long-running API
             # process doesn't accumulate fragmented allocations across runs.
+            # On DGX Spark unified memory the GPU and host share one pool, so
+            # leftover CUDA buffers count against the same RAM the next eval's
+            # weight load needs — without this drain + settle the host can
+            # silently freeze when peak unified memory fills (no OOM in dmesg).
             import gc
             gc.collect()
             try:
                 import torch as _torch
                 if _torch.cuda.is_available():
                     _torch.cuda.empty_cache()
+                    _torch.cuda.synchronize()
+                    _torch.cuda.reset_peak_memory_stats()
                     if hasattr(_torch.cuda, "ipc_collect"):
                         _torch.cuda.ipc_collect()
             except Exception as exc:
                 logger.debug("[lm-eval] cuda cleanup skipped: %s", exc)
+            logger.info("[lm-eval] post-eval cleanup done, sleeping 30s for memory settle")
+            time.sleep(30)
 
     def _evaluate_sync_inner(
         self,
@@ -296,6 +513,10 @@ class LMEvalHarnessBackend:
         from utils.memory_guard import check_memory
 
         check_memory(min_gb=10.0, label=f"pre-eval run={run_id} gen={generation}")
+
+        # Reset the abort flag from any prior force-stop so this fresh eval
+        # isn't aborted before it starts.
+        clear_eval_abort()
 
         harness_version = getattr(lm_eval, "__version__", "unknown")
 
@@ -360,6 +581,21 @@ class LMEvalHarnessBackend:
             model_args,
             {"batch_size": "auto", "device": "cuda"},
         )
+
+        # Forward pre-hook: lm-eval calls model(...) once per batch (~100s of
+        # ms during eval). The hook raises EvalStopped when force_stop set the
+        # abort flag, unwinding lm_eval.simple_evaluate immediately instead of
+        # waiting for the next benchmark boundary.
+        abort_hook_handle = None
+        underlying_model = getattr(lm_obj, "model", None)
+        if underlying_model is not None and hasattr(underlying_model, "register_forward_pre_hook"):
+            def _abort_pre_hook(_module, _inputs):  # noqa: ANN001 — torch hook signature
+                if _eval_abort_event.is_set():
+                    raise EvalStopped("eval aborted by force_stop")
+            try:
+                abort_hook_handle = underlying_model.register_forward_pre_hook(_abort_pre_hook)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[lm-eval] could not register abort pre-hook: %s", exc)
 
         try:
             for bench in bench_names:
@@ -461,6 +697,11 @@ class LMEvalHarnessBackend:
                             bench, exc,
                         )
                         break
+                except EvalStopped:
+                    # Force-stop / cooperative-stop must escape the per-task
+                    # handler so we don't loop into the next benchmark and
+                    # immediately re-trigger the abort hook.
+                    raise
                 except Exception as exc:
                     logger.exception("[lm-eval] task failed (%s/%s): %s", bench, task_id, exc)
                     scores[bench] = 0.0
@@ -470,6 +711,13 @@ class LMEvalHarnessBackend:
                         except Exception:
                             pass
         finally:
+            # Tear down the abort pre-hook so it doesn't leak into the next
+            # eval (which will register its own on its freshly-loaded model).
+            if abort_hook_handle is not None:
+                try:
+                    abort_hook_handle.remove()
+                except Exception:
+                    pass
             # Drop the model reference + flush before returning so the next
             # eval starts from a clean allocator state.
             try:

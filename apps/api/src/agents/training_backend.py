@@ -30,6 +30,95 @@ class TrainingResult:
     duration_seconds: float
 
 
+# ── Train subprocess runner ─────────────────────────────────────
+_TRAIN_WORKER_SCRIPT = "/app/src/scripts/train_worker.py"
+
+
+async def _run_train_subprocess(run_id: str, generation: int, config: dict) -> "TrainingResult":
+    """Spawn train_worker.py and return the result. Subprocess isolation
+    means every generation starts with a fresh CUDA allocator state."""
+    import uuid as _uuid
+    output_path = f"/tmp/train-{run_id}-{generation}-{_uuid.uuid4().hex[:6]}.json"
+    cmd = [
+        "python",
+        _TRAIN_WORKER_SCRIPT,
+        "--run-id", run_id,
+        "--generation", str(generation),
+        "--config", json.dumps(config),
+        "--output", output_path,
+    ]
+    logger.info("[lora-train] spawning train-worker for run=%s gen=%d", run_id, generation)
+
+    # argv-list spawn (no shell, no injection); cmd values are config-driven.
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    async def _consume_stdout() -> None:
+        assert proc.stdout is not None
+        while True:
+            b = await proc.stdout.readline()
+            if not b:
+                return
+            line = b.decode(errors="replace").rstrip()
+            if line:
+                logger.info("[train-worker stdout] %s", line)
+
+    async def _consume_stderr() -> None:
+        assert proc.stderr is not None
+        while True:
+            b = await proc.stderr.readline()
+            if not b:
+                return
+            line = b.decode(errors="replace").rstrip()
+            if line:
+                logger.info("[train-worker stderr] %s", line)
+
+    try:
+        await asyncio.gather(_consume_stdout(), _consume_stderr(), proc.wait())
+    except asyncio.CancelledError:
+        if proc.returncode is None:
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+            except Exception:
+                pass
+        raise
+
+    rc = proc.returncode
+    if rc != 0:
+        try:
+            os.unlink(output_path)
+        except OSError:
+            pass
+        raise RuntimeError(f"train-worker exited with code {rc}")
+
+    try:
+        with open(output_path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"train-worker output unreadable: {exc}") from exc
+    finally:
+        try:
+            os.unlink(output_path)
+        except OSError:
+            pass
+
+    return TrainingResult(
+        adapter_path=data.get("adapter_path"),
+        method=data.get("method", "lora"),
+        training_data_size=int(data.get("training_data_size") or 0),
+        duration_seconds=float(data.get("duration_seconds") or 0.0),
+    )
+
+
 class TrainingBackend(Protocol):
     name: str
 
@@ -75,11 +164,15 @@ class LoRATrainingBackend:
             ) from exc
 
     async def train(self, *, run_id: str, generation: int, config: dict) -> TrainingResult:
-        # Real LoRA training is a long-running, GPU-bound operation. We
-        # delegate to a thread executor so the asyncio event loop stays
-        # responsive (e.g. for /api/evolve/{run_id}/stop).
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._train_sync, run_id, generation, config)
+        """Run LoRA training in a fresh subprocess.
+
+        Subprocess isolation is required on the DGX Spark unified-memory
+        architecture: in-process gc + cuda.empty_cache() leak 1-5 GB per
+        generation, which over a 5-gen sequential run silently freezes the
+        host (NVRM `_memdescAllocInternal` OOM, see project_dgx_freeze_
+        fingerprint memory). Process exit reclaims everything atomically.
+        """
+        return await _run_train_subprocess(run_id, generation, config)
 
     @staticmethod
     def _format_sample(example: dict) -> str:

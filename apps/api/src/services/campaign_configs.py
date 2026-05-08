@@ -13,7 +13,7 @@ from __future__ import annotations
 
 CAMPAIGNS: dict[str, dict] = {
     "baseline_all_models": {
-        "description": "Baseline eval of all models (no training).",
+        "description": "Baseline eval of small/mid models (no training).",
         "experiments": [
             {"model": m, "max_generations": 0, "eval_only": True}
             for m in [
@@ -22,7 +22,16 @@ CAMPAIGNS: dict[str, dict] = {
                 "meta-llama/Llama-3.2-3B-Instruct",
                 "Qwen/Qwen2.5-3B-Instruct",
                 "microsoft/Phi-3.5-mini-instruct",
+            ]
+        ],
+    },
+    "large_models_baseline": {
+        "description": "Baseline eval of 7B+ models — runs separately so DGX unified memory has full headroom.",
+        "experiments": [
+            {"model": m, "max_generations": 0, "eval_only": True}
+            for m in [
                 "Qwen/Qwen2.5-7B-Instruct",
+                "meta-llama/Llama-3.1-8B-Instruct",
             ]
         ],
     },

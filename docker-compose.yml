@@ -122,18 +122,35 @@ services:
       stack:
         soft: 67108864
         hard: 67108864
-    # Cap the API container at 96GB of the 128GB unified DRAM, leaving 32GB
-    # for the host OS, desktop session, and the systemd-Ollama serve process.
-    # On DGX Spark a runaway training job can otherwise drag the whole host
-    # into OOM territory and freeze the desktop. `mem_limit` is the standalone-
-    # compose form; `deploy.resources.limits` is the spec-compliant form.
-    mem_limit: 96g
-    memswap_limit: 96g
+    # Cap the API container at 88GB of the 128GB unified DRAM, leaving 33GB
+    # for the host OS, desktop session, NVRM driver overhead, and the systemd-
+    # Ollama serve process. On DGX Spark a runaway training job can otherwise
+    # drag the whole host into OOM territory and freeze the desktop.
+    #
+    # `memswap_limit: 120g` allows the container to spill 32GB into the host
+    # /swap.img before it cgroup-OOMs — this is the safety valve that prevents
+    # NVRM's silent host-page exhaustion path (the failure mode behind the
+    # 2026-05-07 freeze cascade: NVRM `_memdescAllocInternal` returned
+    # NV_ERR_NO_MEMORY 28× in 1s, OOM-killer never fired because NVRM uses
+    # non-fatal allocation flags, host froze with wedged GPU contexts).
+    #
+    # `mem_reservation: 32g` is a soft floor — Docker requests ≥32GB stay
+    # reserved for this container under host pressure. `oom_score_adj: 500`
+    # makes us slightly more attractive to the host OOM-killer than the
+    # desktop session, so a runaway api gets killed before gnome-shell does.
+    #
+    # `mem_limit` is the standalone-compose form; `deploy.resources.limits`
+    # is the spec-compliant form.
+    mem_limit: 88g
+    memswap_limit: 120g
+    mem_reservation: 32g
+    oom_score_adj: 500
     deploy:
       resources:
         limits:
-          memory: 96G
+          memory: 88G
         reservations:
+          memory: 32G
           devices:
             - driver: nvidia
               count: all

@@ -106,29 +106,26 @@ class PopulationManager:
 
     async def initialize_population(self, *, on_event=None) -> None:
         """Seed K diverse adapters from random training subsets."""
-        from .mutation import mutate_adapter  # heavy — lazy
+        from .mutation import mutate_adapter_subprocess  # heavy — lazy
         cfg = self.config
         await self._notify(on_event, "init", f"Initialising population of {cfg.population_size}")
         samples = await self._curate(cfg.mutation_samples * cfg.population_size, on_event=on_event)
-        loop = asyncio.get_running_loop()
         for i in range(cfg.population_size):
             mid = f"gen0-{i:03d}"
             adapter_path = os.path.join(self.base_dir, "adapters", mid)
             subset = random.sample(samples, min(cfg.mutation_samples, len(samples)))
             await self._notify(on_event, "init", f"Seeding {mid} ({len(subset)} samples, {cfg.mutation_steps} steps)")
-            res = await loop.run_in_executor(
-                None,
-                lambda sd=subset, ap=adapter_path: mutate_adapter(
-                    base_model=cfg.base_model,
-                    seed_adapter_path=None,
-                    samples=sd,
-                    output_dir=ap,
-                    max_steps=cfg.mutation_steps,
-                    learning_rate=cfg.mutation_lr,
-                    batch_size=cfg.batch_size,
-                    lora_rank=cfg.lora_rank,
-                    lora_alpha=cfg.lora_alpha,
-                ),
+            # Subprocess per member — each starts with a clean CUDA allocator.
+            res = await mutate_adapter_subprocess(
+                base_model=cfg.base_model,
+                seed_adapter_path=None,
+                samples=subset,
+                output_dir=adapter_path,
+                max_steps=cfg.mutation_steps,
+                learning_rate=cfg.mutation_lr,
+                batch_size=cfg.batch_size,
+                lora_rank=cfg.lora_rank,
+                lora_alpha=cfg.lora_alpha,
             )
             self.population.append(
                 PopulationMember(
@@ -147,7 +144,7 @@ class PopulationManager:
 
     async def evolve_generation(self, *, on_event=None) -> PopulationMember | None:
         """Run one EPT generation. Returns the new champion."""
-        from .mutation import mutate_adapter  # lazy
+        from .mutation import mutate_adapter_subprocess  # lazy
         self.generation += 1
         cfg = self.config
         await self._notify(on_event, f"gen{self.generation}", f"=== Generation {self.generation} ===")
@@ -185,7 +182,6 @@ class PopulationManager:
         # ── Mutation ─────────────────────────────────────────────
         samples = await self._curate(cfg.mutation_samples * len(children_paths), on_event=on_event)
         children: list[PopulationMember] = []
-        loop = asyncio.get_running_loop()
         for idx, (seed_path, pa, pb, alpha) in enumerate(children_paths):
             mid = f"gen{self.generation}-{idx:03d}"
             mutated_path = os.path.join(self.base_dir, "adapters", mid)
@@ -194,19 +190,17 @@ class PopulationManager:
                 on_event, f"gen{self.generation}",
                 f"Mutating {mid} from {os.path.basename(seed_path)} ({cfg.mutation_steps} steps)",
             )
-            res = await loop.run_in_executor(
-                None,
-                lambda sp=seed_path, mp=mutated_path, sd=subset: mutate_adapter(
-                    base_model=cfg.base_model,
-                    seed_adapter_path=sp,
-                    samples=sd,
-                    output_dir=mp,
-                    max_steps=cfg.mutation_steps,
-                    learning_rate=cfg.mutation_lr,
-                    batch_size=cfg.batch_size,
-                    lora_rank=cfg.lora_rank,
-                    lora_alpha=cfg.lora_alpha,
-                ),
+            # Subprocess per child — clean CUDA allocator each time.
+            res = await mutate_adapter_subprocess(
+                base_model=cfg.base_model,
+                seed_adapter_path=seed_path,
+                samples=subset,
+                output_dir=mutated_path,
+                max_steps=cfg.mutation_steps,
+                learning_rate=cfg.mutation_lr,
+                batch_size=cfg.batch_size,
+                lora_rank=cfg.lora_rank,
+                lora_alpha=cfg.lora_alpha,
             )
             children.append(
                 PopulationMember(

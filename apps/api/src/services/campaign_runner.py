@@ -15,10 +15,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+
+# Path to the eval subprocess worker (set in the Dockerfile via WORKDIR=/app
+# + COPY apps/api/src/ ./src/). Each baseline experiment spawns a fresh
+# instance so the OS reclaims all CUDA / Python memory on exit — see the
+# project_dgx_freeze_fingerprint memory for why in-process gc.collect() +
+# torch.cuda.empty_cache() leak 1-5 GB per model and crash the host.
+_EVAL_WORKER_PATH = "/app/src/scripts/eval_worker.py"
 
 logger = logging.getLogger("modelforge.services.campaign_runner")
 
@@ -34,6 +42,14 @@ _EXPERIMENT_TIMEOUT_SECONDS = 6 * 60 * 60
 # Polling interval while waiting for a sequential run to finish.
 _POLL_INTERVAL_SECONDS = 30
 
+# Cooperative stop only checks `should_stop` at benchmark boundaries (lm-eval
+# is one big sync call we can't interrupt mid-task). On a 7B model an MMLU or
+# HumanEval run can take 30 min, so a click on Stop in the UI looks dead. After
+# this many seconds in `stopping`, escalate to force_stop() automatically so
+# the user doesn't have to discover the Force Stop button. 60s gives a real
+# benchmark boundary a chance to fire while still feeling responsive.
+_STOP_DEADLINE_SECONDS = 60
+
 
 class CampaignRunner:
     run_kind: str = "campaign"
@@ -45,6 +61,12 @@ class CampaignRunner:
         self.current_experiment_index: int = 0
         self.results: list[dict[str, Any]] = []
         self._task: asyncio.Task | None = None
+        # Auto-escalation watchdog scheduled by stop(): force-stops if the
+        # cooperative stop is still pending after _STOP_DEADLINE_SECONDS.
+        self._stop_watchdog: asyncio.Task | None = None
+        # Active eval-worker subprocess (set while a baseline experiment is
+        # running; force_stop() SIGTERMs it for guaranteed memory reclaim).
+        self._eval_subprocess: asyncio.subprocess.Process | None = None
         self._experiments: list[dict] = []
         # Per-repo pre-flight download state, surfaced via get_status() so the
         # dashboard banner can show live progress while weights download.
@@ -193,6 +215,45 @@ class CampaignRunner:
     def stop(self) -> None:
         if self.status in ("running", "paused", "ensuring"):
             self.status = "stopping"
+            # Schedule the deadline watchdog. If the cooperative stop hasn't
+            # transitioned us to idle by _STOP_DEADLINE_SECONDS (e.g. lm-eval
+            # is mid-task and won't yield until the next benchmark boundary),
+            # the watchdog calls force_stop() so the UI doesn't appear wedged.
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None:
+                # Cancel any prior pending watchdog before scheduling a new one
+                # (e.g. user clicked Stop, then Resume, then Stop again).
+                if self._stop_watchdog is not None and not self._stop_watchdog.done():
+                    self._stop_watchdog.cancel()
+                self._stop_watchdog = loop.create_task(self._stop_deadline_watchdog())
+
+    async def _stop_deadline_watchdog(self) -> None:
+        """Auto-escalate cooperative stop to force-stop after the deadline.
+
+        lm-eval's `simple_evaluate` is a sync call we can't interrupt — the
+        runner only checks `should_stop` between benchmarks. On a long task
+        (MMLU on a 7B, HumanEval on any model) that boundary can be 10–30 min
+        away, during which the UI shows `stopping` and looks dead.
+
+        This watchdog gives the cooperative path one minute (a real benchmark
+        boundary often falls within that window), then force-stops if we're
+        still wedged. force_stop() resets the runner to idle and cancels the
+        asyncio task; the lm-eval thread keeps running in the executor pool
+        until it returns naturally, but its result is dropped.
+        """
+        try:
+            await asyncio.sleep(_STOP_DEADLINE_SECONDS)
+        except asyncio.CancelledError:
+            return
+        if self.status == "stopping":
+            logger.warning(
+                "[campaign] cooperative stop wedged for %ds — auto-escalating to force_stop",
+                _STOP_DEADLINE_SECONDS,
+            )
+            self.force_stop()
 
     def force_stop(self) -> dict[str, Any]:
         """Aggressively reset runner state without waiting for the current
@@ -217,6 +278,34 @@ class CampaignRunner:
                 cancelled = True
             except Exception:
                 pass
+        # Signal any in-flight lm-eval thread to abort at its next forward
+        # pass — covers the legacy in-process path still used by EPT and
+        # sequential evolution. The eval-subprocess path (campaign baseline)
+        # is terminated separately below.
+        try:
+            from agents.eval_backend import request_eval_abort
+            request_eval_abort()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[campaign] eval abort signal skipped: %s", exc)
+        # Kill the eval-worker subprocess if one is alive. We schedule the
+        # async terminate as a fire-and-forget task because force_stop() is
+        # synchronous (called from the HTTP handler). The asyncio loop runs
+        # _terminate_eval_subprocess on the next tick, sends SIGTERM with a
+        # 5s grace, then SIGKILL — guaranteed memory reclaim.
+        if self._eval_subprocess is not None and self._eval_subprocess.returncode is None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._terminate_eval_subprocess())
+            except RuntimeError:
+                logger.debug("[campaign] no running loop; cannot async-terminate eval subprocess")
+        # Clean up the stop deadline watchdog if it's still pending — happens
+        # when force_stop is invoked manually before the auto-escalation fires.
+        if self._stop_watchdog is not None and not self._stop_watchdog.done():
+            try:
+                self._stop_watchdog.cancel()
+            except Exception:
+                pass
+        self._stop_watchdog = None
         self.status = "idle"
         self.current_model = None
         self.current_benchmark = None
@@ -351,6 +440,54 @@ class CampaignRunner:
                     break
             if self.status == "stopping":
                 break
+
+            # DRAM gate: GPU allocs on DGX Spark unified memory bypass cgroups,
+            # so a low-DRAM start silently freezes the host instead of OOM-ing.
+            # Wait once, then skip the experiment if we still can't fit.
+            import psutil
+            mem = psutil.virtual_memory()
+            available_gb = mem.available / 1e9
+            logger.info(
+                "[campaign] Memory before exp %d: %.1fGB available",
+                idx + 1, available_gb,
+            )
+            if available_gb < 20:
+                logger.warning(
+                    "[campaign] Only %.1fGB available, waiting 60s...",
+                    available_gb,
+                )
+                await asyncio.sleep(60)
+                mem = psutil.virtual_memory()
+                available_gb = mem.available / 1e9
+                if available_gb < 15:
+                    logger.error(
+                        "[campaign] ABORT: %.1fGB after wait, skipping experiment %d",
+                        available_gb, idx + 1,
+                    )
+                    skipped_model = exp.get("model") or exp.get("base_model") or ""
+                    self.results.append({
+                        "index": idx,
+                        "status": "failed",
+                        "error": f"skipped — only {available_gb:.1f}GB DRAM available",
+                    })
+                    await self._db_upsert_result(db, idx, exp, status="failed", started=True)
+                    await self._db_finish_result(
+                        db, idx, status="failed",
+                        error=f"skipped — only {available_gb:.1f}GB DRAM available",
+                    )
+                    self._log_event(
+                        "experiment_failed",
+                        f"Experiment {idx + 1}/{total} skipped — only {available_gb:.1f}GB DRAM available",
+                        experiment_index=idx,
+                        total_experiments=total,
+                        model=skipped_model,
+                        error=f"insufficient DRAM ({available_gb:.1f}GB)",
+                    )
+                    await self._notify(
+                        f"Experiment {idx + 1}/{total} skipped — only {available_gb:.1f}GB DRAM available",
+                        "🟠",
+                    )
+                    continue
 
             self.current_experiment_index = idx
             model = exp.get("model") or exp.get("base_model") or ""
@@ -554,80 +691,195 @@ class CampaignRunner:
             "🏁",
         )
 
+    async def _run_eval_subprocess(self, exp: dict, model: str, idx: int) -> dict:
+        """Spawn `eval_worker.py` for one model and stream its progress events.
+
+        Subprocess isolation is the only way to fully reclaim CUDA memory on
+        the DGX Spark unified-memory architecture: in-process gc.collect() +
+        torch.cuda.empty_cache() leak 1-5 GB of allocator state per model,
+        which after 4-5 baseline runs causes a silent host freeze (NVRM
+        `_memdescAllocInternal` runs out of host pages, no OOM-killer fires).
+        Process exit reclaims everything atomically.
+        """
+        from agents.eval_backend import _BENCHMARKS
+
+        run_id = f"baseline-{uuid.uuid4().hex[:8]}"
+        short = (model or "").split("/")[-1] or model or "?"
+        bench_list = exp.get("benchmarks") or list(_BENCHMARKS)
+        if not isinstance(bench_list, list):
+            bench_list = list(_BENCHMARKS)
+        benchmarks_arg = ",".join(bench_list)
+
+        output_path = f"/tmp/eval-{run_id}.json"
+        cmd = [
+            "python",
+            _EVAL_WORKER_PATH,
+            "--model", model,
+            "--output", output_path,
+            "--benchmarks", benchmarks_arg,
+        ]
+        eval_limit = exp.get("eval_limit") or exp.get("limit")
+        if isinstance(eval_limit, int) and eval_limit > 0:
+            cmd.extend(["--limit", str(eval_limit)])
+
+        logger.info("[campaign] spawning eval-worker for %s: %s", short, " ".join(cmd))
+        t0 = time.perf_counter()
+
+        # argv-list form (no shell); cmd values come from the campaign config,
+        # not user input, so there is no injection surface.
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        self._eval_subprocess = proc
+
+        async def _consume_stdout() -> None:
+            assert proc.stdout is not None
+            while True:
+                line_bytes = await proc.stdout.readline()
+                if not line_bytes:
+                    return
+                line = line_bytes.decode(errors="replace").rstrip()
+                if not line:
+                    continue
+                if not line.startswith("EVENT: "):
+                    logger.info("[eval-worker stdout] %s", line)
+                    continue
+                try:
+                    evt = json.loads(line[7:])
+                except Exception:
+                    logger.debug("[eval-worker] non-JSON event line: %s", line)
+                    continue
+                et = evt.get("event")
+                if et == "benchmark_started":
+                    name = evt.get("benchmark")
+                    prev = self.current_benchmark
+                    self.current_benchmark = name
+                    for entry in self.current_benchmarks:
+                        if entry.get("name") == name:
+                            entry["status"] = "running"
+                            break
+                    else:
+                        self.current_benchmarks.append({"name": name, "status": "running"})
+                    if name and name != prev:
+                        self._log_event(
+                            "benchmark_started",
+                            f"Benchmark {name} on {short}",
+                            benchmark=name,
+                            model=model,
+                            experiment_index=idx,
+                        )
+                elif et == "benchmark_complete":
+                    name = evt.get("benchmark")
+                    score = float(evt.get("score") or 0.0)
+                    stderr_val = float(evt.get("stderr") or 0.0)
+                    for entry in self.current_benchmarks:
+                        if entry.get("name") == name:
+                            entry["status"] = "error" if score == 0.0 else "done"
+                            entry["score"] = score
+                            entry["stderr"] = stderr_val
+                            break
+                    self._log_event(
+                        "benchmark_complete",
+                        f"Benchmark {name} on {short} = {score:.3f}",
+                        benchmark=name,
+                        model=model,
+                        experiment_index=idx,
+                        score=score,
+                        stderr=stderr_val,
+                    )
+                elif et in ("worker_started", "model_loaded", "worker_complete", "worker_error"):
+                    logger.info("[eval-worker] %s: %s", et, evt)
+                else:
+                    logger.debug("[eval-worker] unknown event: %s", evt)
+
+        async def _consume_stderr() -> None:
+            assert proc.stderr is not None
+            while True:
+                line_bytes = await proc.stderr.readline()
+                if not line_bytes:
+                    return
+                line = line_bytes.decode(errors="replace").rstrip()
+                if line:
+                    logger.info("[eval-worker stderr] %s", line)
+
+        try:
+            await asyncio.gather(
+                _consume_stdout(),
+                _consume_stderr(),
+                proc.wait(),
+            )
+        except asyncio.CancelledError:
+            await self._terminate_eval_subprocess()
+            raise
+        finally:
+            self._eval_subprocess = None
+
+        rc = proc.returncode
+        duration = time.perf_counter() - t0
+
+        if rc not in (0, 3):
+            try:
+                os.unlink(output_path)
+            except OSError:
+                pass
+            raise RuntimeError(f"eval-worker exited with code {rc}")
+
+        try:
+            with open(output_path) as f:
+                result = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"eval-worker output unreadable: {exc}") from exc
+        finally:
+            try:
+                os.unlink(output_path)
+            except OSError:
+                pass
+
+        scores = dict(result.get("scores") or {})
+        stderrs = dict(result.get("stderrs") or {})
+        avg = sum(scores.values()) / len(scores) if scores else 0.0
+        return {
+            "scores": scores,
+            "stderrs": stderrs,
+            "avg_score": float(avg),
+            "duration": float(result.get("duration_seconds") or duration),
+            "method": "baseline",
+            "run_id": run_id,
+        }
+
+    async def _terminate_eval_subprocess(self) -> None:
+        """SIGTERM with a 5s grace, then SIGKILL — guarantees memory reclaim."""
+        proc = self._eval_subprocess
+        if proc is None or proc.returncode is not None:
+            return
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            return
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+            return
+        except asyncio.TimeoutError:
+            logger.warning("[campaign] eval-worker ignored SIGTERM, sending SIGKILL")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[campaign] eval-worker wait error after SIGTERM: %s", exc)
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            return
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[campaign] eval-worker did not exit after SIGKILL: %s", exc)
+
     async def _run_single_experiment(self, exp: dict, db, idx: int) -> dict:
         method = exp.get("method") or ("eval_only" if exp.get("eval_only") else "sequential")
         model = exp.get("model") or exp.get("base_model") or "meta-llama/Llama-3.2-3B-Instruct"
 
         if exp.get("eval_only"):
-            from agents.eval_backend import LMEvalHarnessBackend
-
-            run_id = f"baseline-{uuid.uuid4().hex[:8]}"
-            backend = LMEvalHarnessBackend()
-            t0 = time.perf_counter()
-            def _set_bench(name: str) -> None:
-                # bench_callback fires from a worker thread (lm-eval is sync).
-                # Mark the ladder entry "running" and emit a benchmark_started
-                # event so /api/evolve/{run_id}/events sees it.
-                prev = self.current_benchmark
-                self.current_benchmark = name
-                for entry in self.current_benchmarks:
-                    if entry.get("name") == name:
-                        entry["status"] = "running"
-                        break
-                else:
-                    # Unknown bench name — append so the ladder still grows.
-                    self.current_benchmarks.append({"name": name, "status": "running"})
-                if name and name != prev:
-                    short = (model or "").split("/")[-1] or model or "?"
-                    self._log_event(
-                        "benchmark_started",
-                        f"Benchmark {name} on {short}",
-                        benchmark=name,
-                        model=model,
-                        experiment_index=idx,
-                    )
-
-            def _bench_complete(name: str, score: float, stderr: float) -> None:
-                # Mark the ladder entry done with the score so the dashboard
-                # ladder reads "✓ mmlu 0.624" instead of just "✓ mmlu".
-                for entry in self.current_benchmarks:
-                    if entry.get("name") == name:
-                        entry["status"] = "error" if score == 0.0 else "done"
-                        entry["score"] = float(score)
-                        entry["stderr"] = float(stderr)
-                        break
-                short = (model or "").split("/")[-1] or model or "?"
-                self._log_event(
-                    "benchmark_complete",
-                    f"Benchmark {name} on {short} = {score:.3f}",
-                    benchmark=name,
-                    model=model,
-                    experiment_index=idx,
-                    score=float(score),
-                    stderr=float(stderr),
-                )
-
-            result = await backend.evaluate(
-                run_id=run_id,
-                generation=0,
-                adapter_path=None,
-                config={"base_model": model, **{k: v for k, v in exp.items()
-                        if k in ("eval_limit", "limit")}},
-                should_stop=lambda: self.status == "stopping",
-                bench_callback=_set_bench,
-                bench_complete_callback=_bench_complete,
-            )
-            scores = dict(result.scores or {})
-            stderrs = dict(getattr(result, "stderrs", None) or {})
-            avg = sum(scores.values()) / len(scores) if scores else 0.0
-            return {
-                "scores": scores,
-                "stderrs": stderrs,
-                "avg_score": float(avg),
-                "duration": float(result.duration_seconds or (time.perf_counter() - t0)),
-                "method": "baseline",
-                "run_id": run_id,
-            }
+            return await self._run_eval_subprocess(exp, model, idx)
 
         if method == "ept":
             # Use the same start_runner() entry point /api/ept/start uses so

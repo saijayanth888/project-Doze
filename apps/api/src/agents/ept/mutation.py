@@ -12,16 +12,123 @@ process's import path during cold start.
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import json
 import logging
 import os
 import random
 import shutil
+import tempfile
 import time
+import uuid
 from typing import Any
 
 logger = logging.getLogger("modelforge.ept.mutation")
+
+
+# ── Mutate subprocess runner ────────────────────────────────────
+_MUTATE_WORKER_SCRIPT = "/app/src/scripts/mutate_worker.py"
+
+
+async def mutate_adapter_subprocess(
+    *,
+    base_model: str,
+    seed_adapter_path: str | None,
+    samples: list[dict[str, Any]],
+    output_dir: str,
+    max_steps: int = 50,
+    learning_rate: float = 1e-4,
+    batch_size: int = 2,
+    lora_rank: int = 16,
+    lora_alpha: int = 32,
+    max_seq_length: int = 512,
+) -> dict[str, Any]:
+    """Spawn mutate_worker.py for ONE EPT mutation. Subprocess isolation
+    means each population member's mutation starts with a clean CUDA
+    allocator — critical because EPT does N mutations per generation and
+    in-process leaks accumulate fast on a population_size>=4 run."""
+    samples_path = os.path.join(tempfile.gettempdir(), f"mut-samples-{uuid.uuid4().hex[:8]}.json")
+    result_path = os.path.join(tempfile.gettempdir(), f"mut-result-{uuid.uuid4().hex[:8]}.json")
+    with open(samples_path, "w") as f:
+        json.dump(samples, f)
+
+    cmd = [
+        "python",
+        _MUTATE_WORKER_SCRIPT,
+        "--base-model", base_model,
+        "--samples", samples_path,
+        "--output-dir", output_dir,
+        "--max-steps", str(max_steps),
+        "--learning-rate", str(learning_rate),
+        "--batch-size", str(batch_size),
+        "--lora-rank", str(lora_rank),
+        "--lora-alpha", str(lora_alpha),
+        "--max-seq-length", str(max_seq_length),
+        "--result-json", result_path,
+    ]
+    if seed_adapter_path:
+        cmd.extend(["--seed-adapter", seed_adapter_path])
+
+    logger.info("[mutate-subprocess] spawn out=%s seed=%s", output_dir, seed_adapter_path)
+
+    # argv-list spawn (no shell, no injection); inputs are config-driven.
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    async def _consume(stream, prefix):
+        if stream is None:
+            return
+        while True:
+            b = await stream.readline()
+            if not b:
+                return
+            line = b.decode(errors="replace").rstrip()
+            if line:
+                logger.info("[mutate-worker %s] %s", prefix, line)
+
+    try:
+        await asyncio.gather(_consume(proc.stdout, "stdout"), _consume(proc.stderr, "stderr"), proc.wait())
+    except asyncio.CancelledError:
+        if proc.returncode is None:
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+            except Exception:
+                pass
+        raise
+    finally:
+        try:
+            os.unlink(samples_path)
+        except OSError:
+            pass
+
+    rc = proc.returncode
+    if rc != 0:
+        try:
+            os.unlink(result_path)
+        except OSError:
+            pass
+        raise RuntimeError(f"mutate-worker exited with code {rc}")
+
+    try:
+        with open(result_path) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"mutate-worker output unreadable: {exc}") from exc
+    finally:
+        try:
+            os.unlink(result_path)
+        except OSError:
+            pass
 
 
 def _format_sample(ex: dict[str, Any]) -> str:
