@@ -92,10 +92,16 @@ async def run_eval_subprocess(
 
     logger.info("[eval-subprocess] spawn: %s", " ".join(cmd))
 
+    # 10 MiB readline buffer: lm-eval's tqdm progress concatenates updates with
+    # \r (no newline until the bar finishes). The default 64 KiB limit blows
+    # up on benchmarks like MMLU with thousands of progress updates per task —
+    # readline raises LimitOverrunError and the eval is reported failed even
+    # though the worker is still progressing.
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        limit=10 * 1024 * 1024,
     )
     if proc_holder is not None:
         proc_holder.append(proc)

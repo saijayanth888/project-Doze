@@ -727,10 +727,14 @@ class CampaignRunner:
 
         # argv-list form (no shell); cmd values come from the campaign config,
         # not user input, so there is no injection surface.
+        # 10 MiB readline buffer: lm-eval's tqdm progress emits \r updates that
+        # accumulate past the 64 KiB default before a \n arrives — readline
+        # would otherwise raise LimitOverrunError mid-benchmark.
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=10 * 1024 * 1024,
         )
         self._eval_subprocess = proc
 

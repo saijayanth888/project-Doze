@@ -50,10 +50,13 @@ async def _run_train_subprocess(run_id: str, generation: int, config: dict) -> "
     logger.info("[lora-train] spawning train-worker for run=%s gen=%d", run_id, generation)
 
     # argv-list spawn (no shell, no injection); cmd values are config-driven.
+    # 10 MiB readline buffer: trl's training tqdm uses the same \r-update
+    # pattern as lm-eval; default 64 KiB blows up on long fine-tunes.
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        limit=10 * 1024 * 1024,
     )
 
     async def _consume_stdout() -> None:

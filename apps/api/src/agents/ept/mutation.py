@@ -73,10 +73,13 @@ async def mutate_adapter_subprocess(
     logger.info("[mutate-subprocess] spawn out=%s seed=%s", output_dir, seed_adapter_path)
 
     # argv-list spawn (no shell, no injection); inputs are config-driven.
+    # 10 MiB readline buffer: tqdm output uses \r updates that accumulate
+    # past 64 KiB during long mutations; default would raise LimitOverrunError.
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        limit=10 * 1024 * 1024,
     )
 
     async def _consume(stream, prefix):
