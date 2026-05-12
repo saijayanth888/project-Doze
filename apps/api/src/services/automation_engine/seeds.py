@@ -164,6 +164,47 @@ DEFAULT_WORKFLOWS: list[dict[str, Any]] = [
             },
         ],
     },
+    # ── Trading-bot → Ollama bridge (enabled-by-default; required for the
+    #     full evolution → inference loop). Fires on every track.promoted
+    #     event whose track_id starts with "trading-". ───────────────────
+    {
+        "name": "Publish Promoted Adapter to Ollama",
+        "description": (
+            "On every track.promoted for a trading-* track, push the new "
+            "adapter into the host Ollama as `<base>-<role>-v<date>` and "
+            "swing the `<base>-<role>-current` alias to point at it. This "
+            "is the only path that closes the trading-bot → model-forge → "
+            "Ollama loop -- leave it on unless you're explicitly testing."
+        ),
+        "kind": "system",
+        "enabled": True,
+        "trigger_type": "event",
+        "trigger_config": {"pattern": "track.promoted"},
+        "condition": {"startswith": [{"var": "track_id"}, "trading-"]},
+        "actions": [
+            {
+                "kind": "adapter.publish_ollama",
+                "config": {
+                    "base_model": "qwen3:30b",
+                    "model_name_pattern": "{base_model}-{role}-v{date}",
+                    "alias_pattern": "{base_model}-{role}-current",
+                    "quantization": "q4_k_m",
+                },
+            },
+            {
+                "kind": "notify.slack",
+                # Only ping when publish actually produced a model name --
+                # skipped/error steps already record themselves on the
+                # workflow run row.
+                "condition": {"!=": [{"var": "last.model_name"}, None]},
+                "config": {
+                    "message": "Adapter published: {last.model_name} (alias {last.alias})",
+                    "emoji": "📦",
+                    "event_type": "adapter_published",
+                },
+            },
+        ],
+    },
     # ── Event-driven examples (off by default — show users the shape) ──
     {
         "name": "Champion-Promoted Slack Ping",

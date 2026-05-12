@@ -637,6 +637,7 @@ class SystemMetrics(Action):
 
 # ── Registry ───────────────────────────────────────────────────────────
 
+
 _ALL_ACTIONS: list[type[Action]] = [
     NotifySlack,
     HttpPost,
@@ -651,6 +652,45 @@ _ALL_ACTIONS: list[type[Action]] = [
 ]
 
 ACTION_REGISTRY: dict[str, type[Action]] = {a.kind: a for a in _ALL_ACTIONS}
+
+
+def register_action(cls: type[Action]) -> type[Action]:
+    """Late-binding registration hook for actions defined in other
+    packages.
+
+    External action modules (``agents.actions.*``) import ``Action`` /
+    ``ActionResult`` from this module. If we tried to import THOSE
+    modules back from here at load time we'd create a circular import:
+    the registration call would land while the external module is
+    still mid-init and the class symbol wouldn't yet be bound.
+
+    The clean fix is to make registration a one-way push from the
+    external module *after* it finishes defining its class -- exactly
+    what this helper enables. Idempotent: a duplicate ``kind`` is
+    rejected with a warning rather than silently overwriting.
+    """
+    if not getattr(cls, "kind", ""):
+        logger.warning("[actions] register_action skipped: class has no kind: %r", cls)
+        return cls
+    if cls.kind in ACTION_REGISTRY:
+        logger.debug("[actions] register_action skipped duplicate kind: %s", cls.kind)
+        return cls
+    _ALL_ACTIONS.append(cls)
+    ACTION_REGISTRY[cls.kind] = cls
+    return cls
+
+
+# Pull in actions defined outside this module. Done as a deferred
+# top-level call (not a function) so the import side-effect lands every
+# time this module is loaded -- but happens AFTER the base classes
+# above are bound, so the external module's ``from ... import Action``
+# can succeed. The external module is responsible for calling
+# ``register_action(cls)`` at the bottom of its own file.
+try:  # pragma: no cover -- the import side-effect IS the test
+    from agents.actions import publish_adapter_to_ollama as _publish_module
+    _ = _publish_module  # touched so linters don't drop the import
+except Exception as exc:  # pragma: no cover -- defensive only
+    logger.warning("[actions] failed to load external actions module: %s", exc)
 
 
 def action_schemas() -> list[dict[str, Any]]:
