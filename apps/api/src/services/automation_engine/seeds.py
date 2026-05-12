@@ -191,6 +191,19 @@ DEFAULT_WORKFLOWS: list[dict[str, Any]] = [
                     "quantization": "q4_k_m",
                 },
             },
+            # Mirror to private HF Hub as a durable, off-host backup.
+            # Runs after the local Ollama push so a network outage on HF
+            # doesn't block the zero-network publish; HF skip is silent.
+            {
+                "kind": "adapter.publish_huggingface",
+                "config": {
+                    "repo_id": "Saijayanyh532ai/dgx-trader-adapters",
+                    "revision_pattern": "{track_id}-v{date}",
+                    "keep_last_n": 8,
+                    "include_gguf": True,
+                    "include_safetensors": True,
+                },
+            },
             {
                 "kind": "notify.slack",
                 # Only ping when publish actually produced a model name --
