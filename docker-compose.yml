@@ -323,6 +323,10 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  n8n_data:
+  # n8n_data is intentionally absent — the n8n service is commented out
+  # above and the in-process AutomationEngine is the source of truth for
+  # all scheduling, drift detection, Slack notifications, and reports.
+  # To re-enable n8n, uncomment both the service block and add the volume
+  # back here.
   ollama_models:
   hf_cache:
