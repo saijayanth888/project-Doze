@@ -47,7 +47,7 @@ def _engine_or_503():
 
 @router.get("/workflows")
 async def list_workflows(
-    kind: str | None = Query(None, regex="^(system|user)$"),
+    kind: str | None = Query(None, pattern="^(system|user)$"),
     db: LineageDB = Depends(get_db),
 ) -> dict[str, Any]:
     return {"workflows": await db.list_workflows(kind=kind)}
