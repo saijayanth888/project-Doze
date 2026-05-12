@@ -14,12 +14,54 @@ import os
 import random
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from config.settings import settings
 from utils.lora_targets import get_lora_target_modules
 
 logger = logging.getLogger("modelforge.agents.training")
+
+
+def _resolve_curated_path(curated_path: str | os.PathLike | None) -> Path | None:
+    """Return the curated dataset directory if it exists and is rooted under
+    the configured data root, else ``None``.
+
+    Two guard rails:
+
+    - **Path traversal**: the caller-supplied path must resolve (after
+      symlink chasing) under ``settings.resolve_data_root()``. A request
+      carrying ``curated_path="/etc/passwd"`` or
+      ``curated_path="../../../etc"`` is rejected with a warning so the
+      trainer falls back to the cold-start dataset rather than silently
+      loading attacker-controlled bytes.
+    - **Existence**: ``Path.exists()`` so a stale path from a missing
+      generation also falls back instead of raising ``FileNotFoundError``
+      inside ``load_from_disk``.
+    """
+    if not curated_path:
+        return None
+    try:
+        cand = Path(curated_path).expanduser().resolve()
+    except (OSError, RuntimeError) as exc:
+        logger.warning("[curated-path] cannot resolve %r: %s", curated_path, exc)
+        return None
+    if not cand.exists():
+        return None
+    try:
+        root = settings.resolve_data_root().resolve()
+    except Exception as exc:  # pragma: no cover — settings failure is operator-visible
+        logger.warning("[curated-path] cannot resolve data root: %s", exc)
+        return None
+    try:
+        cand.relative_to(root)
+    except ValueError:
+        logger.warning(
+            "[curated-path] rejected %s — not under configured data root %s",
+            cand, root,
+        )
+        return None
+    return cand
 
 
 @dataclass
@@ -207,7 +249,7 @@ class LoRATrainingBackend:
     def _train_sync_inner(self, run_id: str, generation: int, config: dict) -> TrainingResult:
         import redis
         import torch
-        from datasets import load_dataset
+        from datasets import load_dataset, load_from_disk
         from peft import LoraConfig, PeftModel, get_peft_model
         from transformers import (
             AutoModelForCausalLM,
@@ -298,7 +340,30 @@ class LoRATrainingBackend:
         )
         model = get_peft_model(model, lora_cfg)
 
-        raw = load_dataset("Open-Orca/OpenOrca", split="train[:1000]")
+        # Honor the curated dataset produced by data_curator + augment_training.
+        # `curated_path` is set in evolution_graph.train_adapter before this call;
+        # callers may also pass it directly when invoking the trainer outside the
+        # graph (e.g. trading-bot integration). When absent or unsafe, fall back
+        # to the OpenOrca cold-start dataset with a WARNING so the regression is
+        # visible in logs.
+        curated_path = config.get("curated_path") or config.get("training_data_path")
+        safe_curated = _resolve_curated_path(curated_path)
+        if safe_curated is not None:
+            logger.info("[lora-train] loading curated dataset from %s", safe_curated)
+            raw = load_from_disk(str(safe_curated))
+        else:
+            if curated_path:
+                logger.warning(
+                    "[lora-train] curated_path=%r unusable (missing or outside data root); "
+                    "falling back to OpenOrca cold-start dataset",
+                    curated_path,
+                )
+            else:
+                logger.warning(
+                    "[lora-train] no curated_path provided; "
+                    "falling back to OpenOrca cold-start dataset"
+                )
+            raw = load_dataset("Open-Orca/OpenOrca", split="train[:1000]")
         dataset = raw.map(lambda ex: {"text": self._format_sample(ex)})
 
         bf16 = bool(torch.cuda.is_available() and getattr(torch.cuda, "is_bf16_supported", lambda: False)())
