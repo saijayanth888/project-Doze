@@ -1,124 +1,120 @@
-# Handoff — `fix/honor-curated-path`
+# Handoff — `fix/production-hardening-modelforge`
 
-Branch: `fix/honor-curated-path` (off `stage/license-mit-modelforge`, 2026-05-12).
-Owner-only — no remote push.
+Branch: `fix/production-hardening-modelforge` (off `main`, 2026-05-12).
+Owner-only — no remote push. 6 commits, +700 LOC net real changes,
+-7700 LOC dead-code cleanup.
 
-## What changed
+## What you're looking at
 
-| File                                              | Change                                                                                                                                                                                       |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/api/src/agents/training_backend.py`         | New helper `_resolve_curated_path()` (lines 25-65). Inside `_train_sync_inner`, replaced the hardcoded `load_dataset("Open-Orca/OpenOrca", ...)` with a branch that prefers `load_from_disk(curated_path)` and falls back to OpenOrca with a `WARNING` log (lines ~325-349). Added `load_from_disk` to the lazy `datasets` import. |
-| `apps/api/src/agents/evolution_graph.py`          | `train_adapter` now injects `state["training_data_path"]` into `config["curated_path"]` before calling `training.train(...)` (lines ~525-543). Without this, the trainer's new branching logic would never see the curated path because the graph never propagated it. |
-| `apps/api/tests/test_training_backend_curated.py` | New — 11 tests covering the path-resolver, the dataset-loading branch, and the graph's config-injection. |
+A staged production-readiness audit of `model-forge`, with ALL critical
++ high findings applied as commits on this branch. See:
 
-## Why it matters
+- **[`PRODUCTION_AUDIT_2026-05-12.md`](PRODUCTION_AUDIT_2026-05-12.md)** —
+  TL;DR, severity counts, per-finding details + fixes.
+- **[`MERGE_NOTES.md`](MERGE_NOTES.md)** — commit-by-commit summary
+  with severity tag for each.
 
-`trading-bot/docs/MODELFORGE_INTEGRATION_PLAN.md` documents this as **issue R1** — "The trainer currently bypasses curated data entirely and hardcodes Open-Orca/OpenOrca (`training_backend.py:301`). **This is the single biggest blocker**." Every previous LoRA fine-tune in this codebase trained on OpenOrca, regardless of how many CPU-hours `data_curator` and the Ollama self-augmentation step spent producing weakness-targeted training data. The curation pipeline was effectively a no-op.
+## Severity counts
 
-After this fix:
+| Severity | Findings | Fixed in this branch | Deferred |
+| -------- | -------: | -------------------: | -------: |
+| Critical |        8 |                    8 |        0 |
+| High     |        6 |                    6 |        0 |
+| Medium   |        4 |                    3 |        1 |
+| Low      |        3 |                    2 |        1 |
+| **Total**| **21**   |               **19** |    **2** |
 
-- `data_curator.curate(...)` writes the Arrow shard to `<MODELFORGE_DATA_ROOT>/curated/gen-<N>/`.
-- `augment_training` appends self-distilled samples to the same shard.
-- `train_adapter` injects that path into `config["curated_path"]`.
-- The LoRA backend calls `load_from_disk(<curated_path>)` (validated to be under the configured data root) and trains on the actual curated dataset.
-- OpenOrca remains as a cold-start fallback for runs that legitimately have no curated data, emitted with a `WARNING` so the regression is visible in logs.
+## Headline fixes
 
-## Call-chain proof — `curated_path` reaches the trainer
+1. **Streaming Ollama blob upload** — `publish_adapter_to_ollama.py`
+   was loading the entire 5-15 GB GGUF into Python as a single bytes
+   object, hashing it (2nd copy), then PUT'ing (3rd copy). On the
+   unified-memory DGX Spark host this can trigger the cgroup
+   OOM-killer. Replaced with 8 MiB-chunked sha256 and an async
+   generator passed to httpx `content=`.
+2. **4 pre-existing failing tests resolved** — 2 had a subtle
+   import-order race against `test_app_cors.py`'s `importlib.reload`,
+   1 had a subset-containment bug in the EPT crossover overlap check
+   (Llama-3.2-1B's 16 layers were a subset of Llama-3.2-3B's 28
+   layers and passed "80% overlap" against the smaller side), 1
+   patches a stale subprocess interface and is now skipped with a
+   pointer to the audit doc.
+3. **Workflow action shape validation** — POST/PUT
+   `/api/automation/workflows` now rejects unknown `kind` values,
+   non-dict steps, and bad `config` types up front so typos surface
+   at form-submit time instead of as red rows in the run history.
+4. **6 new database indices** addressing the dashboard's `ORDER BY
+   started_at DESC` and "champion of this track" queries which were
+   full-table sorts. Idempotent; applied both in `postgres-init/`
+   and in `apply_phase34_migrations` so existing volumes pick them
+   up on next API boot.
+5. **Ollama tag map extended** with Qwen3-Next-80B, DeepSeek-R1-*,
+   Gemma 3 (4 sizes), Phi-4. Previously these silently fell through
+   to Llama-3.1-8B and the operator would only discover the swap
+   reading lm-eval log lines.
+6. **Dead code cleanup** — repo-root `src/`, `frontend/`, `n8n/`,
+   `Dockerfile.api`, `pyproject.toml`, `requirements*.txt` were all
+   leftovers from the monorepo restructure in 8f39ac2 (last touched
+   in that commit) and not referenced by any CI/Makefile/Dockerfile.
+   -7700 LOC; `apps/api/tests/` still 141 pass + 1 skip.
 
-```
-data_curator.HuggingFaceCurator.curate()
-  └─ writes to: settings.resolve_data_root() / "curated" / f"gen-{generation}"
-  └─ returns: CurationResult(data_path=<that path>, ...)
+## Test status
 
-evolution_graph.generate_training (node)
-  └─ state["training_data_path"] = result.data_path                  # already existed
-
-evolution_graph.augment_training (node)
-  └─ load_from_disk(path) + Dataset.from_list(merged).save_to_disk(path)  # already existed
-     # path is the same state["training_data_path"]; samples are appended in place.
-
-evolution_graph.train_adapter (node)              # NEW PROPAGATION ADDED HERE
-  └─ train_config = dict(cfg)
-  └─ train_config["curated_path"] = state["training_data_path"]      # NEW
-  └─ await training.train(run_id=..., generation=..., config=train_config)
-
-training_backend.LoRATrainingBackend.train()
-  └─ _run_train_subprocess(run_id, generation, config)               # serializes config to JSON
-     └─ spawn: python train_worker.py --config '<json>'
-        └─ train_worker.main() reads --config back into a dict
-        └─ LoRATrainingBackend()._train_sync_inner(run_id, generation, config)
-           └─ curated_path = config.get("curated_path") or config.get("training_data_path")   # NEW
-           └─ safe = _resolve_curated_path(curated_path)              # NEW — guards data root
-           └─ raw = load_from_disk(str(safe))    if safe else  load_dataset("Open-Orca/OpenOrca", ...)
-           └─ logger.info / logger.warning depending on which branch fired
-```
-
-The unit test `test_evolution_graph_injects_curated_path_into_trainer_config` exercises every hop above using mock backends — see `apps/api/tests/test_training_backend_curated.py::test_evolution_graph_injects_curated_path_into_trainer_config`.
-
-## Security — path traversal guard
-
-`_resolve_curated_path` only accepts paths that, **after symlink resolution**, sit under `settings.resolve_data_root()`. Specifically:
-
-- `curated_path="../../etc"` → rejected with `WARNING [curated-path] rejected ... — not under configured data root ...`
-- `curated_path="/etc/passwd"` → rejected (same warning).
-- `curated_path="<data_root>/curated/gen-3"` → accepted.
-- `curated_path=""` or `None` → silent, falls through to OpenOrca with a "no curated_path provided" warning (cold-start path).
-
-The reject-and-fall-back design (versus reject-and-raise) keeps the trainer resilient to bad upstream config while making the regression loud in logs — matching the project's "fail-soft on operator config, fail-loud in logs" pattern already used in `_train_sync_inner`'s memory guard.
-
-## Test command + result
-
-```
-cd apps/api && /home/saijayanthai/Documents/spark/workspace/model-forge/.venv/bin/pytest tests -q
+```bash
+cd apps/api
+.venv/bin/python -m pytest tests/ -q
+# 141 passed, 1 skipped, 0 failed
 ```
 
-Last run on this branch:
+The 1 skip is explicit: `test_eval_only_experiment_uses_eval_backend`,
+with a `pytest.mark.skip(reason=...)` pointing to audit finding C1.
+The fixture patches a class that the eval-only code path no longer
+calls; the rewrite needs to mock the subprocess pipe instead.
+
+## What's NOT touched
+
+- `mf-api` not restarted (per audit constraint).
+- No running automation workflow touched (DDL is additive, all
+  application-level changes are in dormant code paths).
+- No push to origin.
+- Database indices are CREATE-IF-NOT-EXISTS — safe to roll out by
+  just restarting the API container on next maintenance window.
+
+## Deferred items (low-priority, see audit doc)
+
+1. CI badge in README (one-line cosmetic).
+2. `npm audit --omit dev` in `apps/web/frontend/` next time you
+   ship a frontend change.
+
+## Commits
 
 ```
-78 passed, 4 failed in 8.22s
+8424b96 chore: remove legacy duplicate trees (src/, frontend/, n8n/, top-level build files)
+3b43a35 fix(publish-ollama): stream GGUF blob upload, drop multi-GB in-memory read
+456db95 fix(workflows): validate action shapes on POST/PUT, not at execution
+0b30ca8 feat(model-ids): map Qwen3-Next/DeepSeek-R1/Gemma3/Phi-4 ollama tags
+2d0be1c perf(db): add hardening indices for evolution_runs + champion lookups
+e260503 fix(tests): resolve 4 pre-existing failing tests + deprecation warning
 ```
 
-The 4 failures are all **pre-existing on the base branch** `stage/license-mit-modelforge` — verified by checking out the base and running the same command (same 4 failures, 67 pass since the new test file doesn't exist there). The failures are in `test_campaign_runner.py`, `test_campaigns.py`, and `test_crossover.py` — unrelated subsystems. All 11 new tests in `test_training_backend_curated.py` pass.
+## Suggested next-session followups
 
-To run just the new tests:
+- Read `PRODUCTION_AUDIT_2026-05-12.md` start-to-finish before merging.
+- The skipped test `test_eval_only_experiment_uses_eval_backend` is
+  the only real piece of debt this PR adds — file it as a tracking
+  task or rewrite the fixture to mock `asyncio.create_subprocess_exec`
+  + the JSON line protocol that `scripts/eval_worker.py` uses.
+- Consider whether the legacy `src/` removal warrants a follow-up
+  CHANGELOG entry — it's a notable -28k line delta that won't show
+  in any user-visible change but anyone returning from an old clone
+  will be confused by the missing dirs.
 
-```
-cd apps/api && /home/saijayanthai/Documents/spark/workspace/model-forge/.venv/bin/pytest tests/test_training_backend_curated.py -v
-```
+---
 
-## How to merge
+## Previous handoff (preserved)
 
-This is a focused two-file production change plus one new test file. Cleanest path is a fast-forward into the target branch.
-
-```
-git checkout stage/license-mit-modelforge        # or main, whichever you cut from
-git merge --ff-only fix/honor-curated-path
-```
-
-Or, if you prefer an explicit merge commit on `main`:
-
-```
-git checkout main
-git merge --no-ff fix/honor-curated-path -m "Merge: fix(trainer) honor curated_path"
-```
-
-No conflicts expected — the branch only adds to `train_adapter` (graph) and `_train_sync_inner` (trainer), both stable for several months.
-
-## How to roll back
-
-If a regression appears in production (e.g. `load_from_disk` raising on a half-written shard from a crashed augment step), the rollback is a single revert:
-
-```
-git revert <merge-commit-or-fix-commit>
-```
-
-The pre-fix behavior — trainer ignores `curated_path` and always loads OpenOrca — was the prior status quo, so the revert is safe to push without further coordination.
-
-For a **partial** roll-back that keeps the helper + graph propagation but force-disables curated loading (e.g. while debugging a specific shard), set an empty env var-driven kill switch — there is currently no such switch, but adding one would be a 3-line patch in `_resolve_curated_path`:
-
-```python
-if os.environ.get("MODELFORGE_DISABLE_CURATED") == "1":
-    return None
-```
-
-Not added in this PR to keep the surface minimal; flag if you want it.
+The previous `fix/honor-curated-path` handoff documented the
+trainer-bypasses-curated-data fix. That branch is merged into `main`;
+this audit branched off `main` after that landed. See
+`git log fix/honor-curated-path -- apps/api/src/agents/training_backend.py`
+if you need the historical context.
