@@ -351,6 +351,126 @@ class MockEvalBackend:
         return EvalResult(scores=scores, duration_seconds=self._sleep_s)
 
 
+# ── Trading-track eval backend ───────────────────────────────────
+class TradingEvalBackend:
+    """Drop-in EvalBackend that dispatches to a trading-eval module.
+
+    Wraps :mod:`agents.evals.eval_registry`. When the run's
+    ``config["track_id"]`` matches a registered trading track, this backend
+    routes scoring to the relevant module (reflector / debater / arbiter /
+    structured_json) instead of running lm-eval-harness. When ``track_id`` is
+    absent or unknown, it falls through to the wrapped ``fallback`` backend
+    -- so legacy MMLU/GSM8K evolutions continue to work unchanged.
+
+    Wiring it into the runner is intentionally a no-op for non-trading runs:
+    you only get trading scoring when ``config`` carries both ``track_id`` and
+    ``eval_set_path``. This is the additive-only invariant required by the
+    integration plan.
+    """
+
+    name = "trading"
+
+    def __init__(
+        self,
+        *,
+        fallback: "EvalBackend | None" = None,
+        adapter_runner: Callable[[str, list[str]], list[str]] | None = None,
+    ) -> None:
+        self._fallback = fallback
+        self._adapter_runner = adapter_runner
+
+    async def evaluate(
+        self,
+        *,
+        run_id: str,
+        generation: int,
+        adapter_path: str | None,
+        config: dict | None = None,
+        should_stop: Callable[[], bool] | None = None,
+        bench_callback: Callable[[str], None] | None = None,
+        bench_complete_callback: Callable[[str, float, float], None] | None = None,
+    ) -> EvalResult:
+        cfg = config or {}
+        track_id = str(cfg.get("track_id") or "").strip()
+        test_set_path = cfg.get("eval_set_path") or cfg.get("test_set_path")
+
+        # Late import: keeps the standard MMLU/GSM8K path importable in
+        # stripped-down envs that don't ship the evals package.
+        try:
+            from agents.evals.eval_registry import resolve_eval as _resolve
+        except ImportError as exc:
+            logger.warning("[trading-eval] registry unavailable, falling back: %s", exc)
+            _resolve = lambda _t: None  # noqa: E731
+
+        scorer = _resolve(track_id) if track_id else None
+
+        if scorer is None or not test_set_path or not adapter_path:
+            # Not a trading run, or trading run missing required inputs -> use
+            # the fallback backend if one was provided.
+            if self._fallback is None:
+                raise RuntimeError(
+                    "TradingEvalBackend dispatched without a track + eval_set_path, "
+                    "and no fallback backend was provided."
+                )
+            return await self._fallback.evaluate(
+                run_id=run_id,
+                generation=generation,
+                adapter_path=adapter_path,
+                config=cfg,
+                should_stop=should_stop,
+                bench_callback=bench_callback,
+                bench_complete_callback=bench_complete_callback,
+            )
+
+        if should_stop and should_stop():
+            raise EvalStopped("stopped before trading eval")
+
+        # Surface a single "benchmark" tick at start + finish so the UI flips
+        # phases. We don't break each metric into its own tick because the
+        # trading evals run as one cohesive pass over the same test set.
+        bm_label = f"trading:{track_id}"
+        if bench_callback:
+            try:
+                bench_callback(bm_label)
+            except Exception:
+                pass
+
+        t0 = time.perf_counter()
+        # Run the (sync) scorer in a thread so we don't block the event loop --
+        # downstream inference may issue blocking HTTP calls to Ollama / PEFT.
+        scorer_kwargs: dict = {}
+        if self._adapter_runner is not None:
+            scorer_kwargs["adapter_runner"] = self._adapter_runner
+
+        result: EvalResult = await asyncio.to_thread(
+            scorer,
+            str(adapter_path),
+            str(test_set_path),
+            **scorer_kwargs,
+        )
+        elapsed = time.perf_counter() - t0
+
+        if bench_complete_callback:
+            try:
+                # Report the average score as the "headline" number for the UI.
+                avg = (
+                    sum(float(v) for v in (result.scores or {}).values()) / max(1, len(result.scores or {}))
+                )
+                bench_complete_callback(bm_label, float(avg), 0.0)
+            except Exception:
+                pass
+
+        # Stamp the duration if the scorer didn't.
+        if not result.duration_seconds:
+            result.duration_seconds = elapsed
+
+        logger.info(
+            "[trading-eval %s] run=%s gen=%d scores=%s (%.2fs)",
+            track_id, run_id, generation, result.scores, elapsed,
+        )
+        return result
+
+
 # ── lm-eval-harness (DGX Spark) ──────────────────────────────────
 def _extract_lm_eval_score(task: str, results: dict) -> float:
     """Find the canonical metric for ``task`` in the lm-eval results dict.
