@@ -474,10 +474,18 @@ def build_graph(
         # the entire run of this node.
         await _emit(state, "train_adapter")
         t0 = time.perf_counter()
+        # Inject the curator's output directory into the trainer's config so
+        # the LoRA backend loads the actual curated+augmented dataset instead
+        # of the OpenOrca cold-start fallback. The trainer validates the path
+        # is rooted under the configured data root before using it.
+        train_config = dict(cfg)
+        curated = state.get("training_data_path")
+        if curated and "curated_path" not in train_config:
+            train_config["curated_path"] = curated
         result: TrainingResult = await training.train(
             run_id=state["run_id"],
             generation=state["generation"],
-            config=state.get("config", {}),
+            config=train_config,
         )
         state["adapter_path"] = result.adapter_path
         state["method"] = result.method
