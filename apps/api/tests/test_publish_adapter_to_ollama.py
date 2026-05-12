@@ -404,7 +404,12 @@ def test_seed_workflow_is_registered_and_enabled() -> None:
     cond = wf["condition"]
     assert cond == {"startswith": [{"var": "track_id"}, "trading-"]}
     kinds = [a["kind"] for a in wf["actions"]]
-    assert kinds == ["adapter.publish_ollama", "notify.slack"]
+    # HF mirror lands BETWEEN ollama and slack — wired in feat/hf-adapter-publish.
+    assert kinds == [
+        "adapter.publish_ollama",
+        "adapter.publish_huggingface",
+        "notify.slack",
+    ]
 
 
 def test_action_registered_in_registry() -> None:

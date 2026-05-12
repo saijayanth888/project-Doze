@@ -692,6 +692,12 @@ try:  # pragma: no cover -- the import side-effect IS the test
 except Exception as exc:  # pragma: no cover -- defensive only
     logger.warning("[actions] failed to load external actions module: %s", exc)
 
+try:  # pragma: no cover -- the import side-effect IS the test
+    from agents.actions import publish_adapter_to_hf as _publish_hf_module
+    _ = _publish_hf_module  # touched so linters don't drop the import
+except Exception as exc:  # pragma: no cover -- defensive only
+    logger.warning("[actions] failed to load HF publish action: %s", exc)
+
 
 def action_schemas() -> list[dict[str, Any]]:
     """All actions exposed to the UI form builder."""

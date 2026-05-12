@@ -39,3 +39,7 @@ safetensors>=0.4.0
 sentencepiece>=0.2.0
 lm-eval>=0.4.11,<0.5
 sentence-transformers>=3.0.0
+# Used by adapter.publish_huggingface (pure-Python HTTP client; no heavy
+# native deps). Transitively pulled by transformers, but pinned here so
+# version drift can't silently break the upload path.
+huggingface_hub>=1.0.0,<2
