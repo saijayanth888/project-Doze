@@ -97,9 +97,11 @@ _OPS: dict[str, Callable[[Any, dict[str, Any]], Any]] = {
     "and":      lambda args, ctx: all(bool(evaluate(a, ctx)) for a in args),
     "or":       lambda args, ctx: any(bool(evaluate(a, ctx)) for a in args),
     "not":      lambda args, ctx: not bool(evaluate(args[0] if isinstance(args, list) else args, ctx)),
-    "in":       _binop(lambda a, b: a in b),
-    "contains": _binop(lambda a, b: b in a),
-    "truthy":   _is_truthy,
+    "in":         _binop(lambda a, b: a in b),
+    "contains":   _binop(lambda a, b: b in a),
+    "startswith": _binop(lambda a, b: str(a).startswith(str(b))),
+    "endswith":   _binop(lambda a, b: str(a).endswith(str(b))),
+    "truthy":     _is_truthy,
 }
 
 
