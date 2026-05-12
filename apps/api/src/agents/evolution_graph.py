@@ -64,6 +64,11 @@ logger = logging.getLogger("modelforge.agents.graph")
 class EvolutionState(TypedDict, total=False):
     run_id: str
     config: dict
+    # Optional per-run track identifier (e.g. "trading-reflector"). When set,
+    # TradingEvalBackend routes scoring to the matching scorer; when absent
+    # or empty, the legacy lm-eval-harness path runs. Mirrored from
+    # config["track_id"] for explicit plumbing/observability — task #46.
+    track_id: str
     generation: int
     max_generations: int
     parent_scores: dict[str, float]
@@ -517,11 +522,20 @@ def build_graph(
         # fires once eval finishes, recording the same step idempotently.
         await _emit(state, "evaluate")
         t0 = time.perf_counter()
+        # Task #46 path A: ensure track_id from state surfaces into the eval
+        # config so TradingEvalBackend.dispatch lands in the per-track scorer
+        # branch. state["config"] is the source of truth, but the runner also
+        # mirrors track_id into state["track_id"]; we merge both so a stale
+        # config dict can never drop the routing key.
+        eval_config = dict(state.get("config") or {})
+        _track_id = str(state.get("track_id") or "").strip()
+        if _track_id:
+            eval_config["track_id"] = _track_id
         result: EvalResult = await eval_backend.evaluate(
             run_id=state["run_id"],
             generation=state["generation"],
             adapter_path=state.get("adapter_path"),
-            config=state.get("config") or {},
+            config=eval_config,
         )
         state["child_scores"] = result.scores
         state["eval_seconds"] = result.duration_seconds or (time.perf_counter() - t0)

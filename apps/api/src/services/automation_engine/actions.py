@@ -197,6 +197,13 @@ class EvolutionStart(Action):
         {"name": "lora_rank", "type": "number", "label": "LoRA rank", "default": 16},
         {"name": "batch_size", "type": "number", "label": "Batch size", "default": 2},
         {"name": "learning_rate", "type": "number", "label": "Learning rate", "default": 0.0002},
+        # Track-id pipeline (task #46 path A): when set to e.g.
+        # "trading-reflector", the eval-backend dispatch will route to the
+        # TradingEvalBackend's per-track scorer instead of the legacy
+        # lm-eval-harness path. Empty string = legacy behaviour (preserved).
+        {"name": "track_id", "type": "string",
+         "label": "Track ID (optional, dispatches per-track eval)",
+         "default": ""},
     ]
 
     async def execute(self, *, config, context, engine):
@@ -215,6 +222,12 @@ class EvolutionStart(Action):
 
         run_id = f"run-{uuid4().hex[:8]}"
         run_config = {k: v for k, v in config.items() if v is not None}
+        # Drop empty-string track_id so the legacy "no track_id" path keeps
+        # the key absent from run_config (TradingEvalBackend treats absent
+        # and "" identically, but absent is the documented legacy shape --
+        # preserve it). Other fields keep "" semantics unchanged.
+        if isinstance(run_config.get("track_id"), str) and not run_config["track_id"].strip():
+            run_config.pop("track_id", None)
         try:
             await engine.db.save_run(run_id, "starting", run_config)
             start_evolution(run_id, run_config, engine.db)

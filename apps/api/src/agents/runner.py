@@ -20,6 +20,7 @@ from agents.eval_backend import (
     EvalBackend,
     LMEvalHarnessBackend,
     MockEvalBackend,
+    TradingEvalBackend,
 )
 from agents.evolution_graph import EvolutionState, _avg, build_graph
 from agents.training_backend import (
@@ -209,8 +210,17 @@ def request_stop(run_id: str) -> bool:
 
 
 def _select_backends(prefer_real: bool) -> tuple[TrainingBackend, EvalBackend, DataCuratorBackend]:
+    # Task #46 path A: wrap the chosen eval backend in TradingEvalBackend so
+    # runs whose config carries a registered ``track_id`` dispatch to the
+    # per-track scorer (reflector / debater / arbiter / structured_json /
+    # regime_tagger / indicator_selector). Non-trading runs fall through to
+    # the wrapped fallback (Mock or LMEvalHarness) -- additive-only.
     if not prefer_real:
-        return MockTrainingBackend(), MockEvalBackend(), MockDataCurator()
+        return (
+            MockTrainingBackend(),
+            TradingEvalBackend(fallback=MockEvalBackend()),
+            MockDataCurator(),
+        )
     try:
         curator: DataCuratorBackend
         try:
@@ -218,10 +228,18 @@ def _select_backends(prefer_real: bool) -> tuple[TrainingBackend, EvalBackend, D
         except Exception as exc:
             logger.warning("Curator backend unavailable (%s) — using mock curator.", exc)
             curator = MockDataCurator()
-        return LoRATrainingBackend(), LMEvalHarnessBackend(), curator
+        return (
+            LoRATrainingBackend(),
+            TradingEvalBackend(fallback=LMEvalHarnessBackend()),
+            curator,
+        )
     except Exception as exc:
         logger.warning("GPU backends unavailable (%s) — falling back to mock backends.", exc)
-        return MockTrainingBackend(), MockEvalBackend(), MockDataCurator()
+        return (
+            MockTrainingBackend(),
+            TradingEvalBackend(fallback=MockEvalBackend()),
+            MockDataCurator(),
+        )
 
 
 async def _run(run_id: str, config: dict, db: LineageDB) -> None:
@@ -256,9 +274,15 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
         "config": config,
     })
 
+    # Task #46 path A: mirror track_id from config into top-level state so
+    # downstream nodes (and observers) can read it without re-parsing the
+    # config dict. Empty/missing -> empty string (legacy/no-op path).
+    _track_id = str((config or {}).get("track_id") or "").strip()
+
     state: EvolutionState = {
         "run_id": run_id,
         "config": config,
+        "track_id": _track_id,
         "generation": 0,
         "max_generations": int(config.get("max_generations", 10)),
         "parent_scores": {},
@@ -275,6 +299,8 @@ async def _run(run_id: str, config: dict, db: LineageDB) -> None:
         "champion_path": None,
         "champion_avg": 0.0,
     }
+    if _track_id:
+        logger.info("[evolution %s] track_id=%s — per-track eval dispatch enabled", run_id, _track_id)
 
     async def on_state_change(s: EvolutionState, step: str) -> None:
         # Cooperative cancellation
