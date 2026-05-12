@@ -678,6 +678,17 @@ class LineageDB:
                 PRIMARY KEY (plan_id, experiment_index)
             )
             """,
+            # ── Production-hardening indices (PRODUCTION_AUDIT_2026-05-12) ──
+            # Idempotent. Without these, evolution_runs paginated listings
+            # do a full-table sort once the table grows past a few thousand
+            # rows. Mirrored in scripts/postgres-init/04-hardening-indices.sql
+            # for fresh-volume installs.
+            "CREATE INDEX IF NOT EXISTS idx_runs_started_at ON evolution_runs (started_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_runs_active ON evolution_runs (started_at DESC) WHERE archived_at IS NULL",
+            "CREATE INDEX IF NOT EXISTS idx_bench_run_bench ON benchmark_scores (run_id, benchmark)",
+            "CREATE INDEX IF NOT EXISTS idx_track_gens_promoted ON track_generations (track_id, generation DESC) WHERE promoted",
+            "CREATE INDEX IF NOT EXISTS idx_gen_champion ON generations (run_id) WHERE is_champion",
+            "CREATE INDEX IF NOT EXISTS idx_gen_promoted ON generations (run_id, generation DESC) WHERE promoted",
         ]
         async with self._pool.acquire() as conn:
             for stmt in ddl:

@@ -446,3 +446,67 @@ def test_render_name_substitutes_all_placeholders() -> None:
         date="20260512", generation=4, run_id="run-x",
     )
     assert name == "qwen3-30b-reflector-v20260512-g4-run-x"
+
+
+# ── streaming hashing + upload ─────────────────────────────────────────
+
+
+def test_hash_gguf_streaming_matches_full_read(tmp_path: Path) -> None:
+    """The streaming hasher must produce the same digest as a single
+    ``read_bytes()`` would, regardless of chunk boundaries.
+
+    We pick a payload bigger than the 8 MiB chunk size so multiple
+    iterations fire, and a few "ragged" sizes to make sure the last
+    short chunk is handled.
+    """
+    import hashlib
+    import os
+    import random
+
+    for size in (1, 4096, 8 * 1024 * 1024, 8 * 1024 * 1024 + 17, 21_000_000):
+        rng = random.Random(size)
+        payload = bytes(rng.getrandbits(8) for _ in range(size))
+        p = tmp_path / f"blob-{size}.gguf"
+        p.write_bytes(payload)
+
+        expected = hashlib.sha256(payload).hexdigest()
+        digest, reported_size = pub._hash_gguf_streaming(p)
+        assert digest == expected, f"size={size}"
+        assert reported_size == size
+
+        os.unlink(p)
+
+
+async def test_publish_streams_blob_via_async_iterator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The PUT request body must be a single contiguous blob equal to
+    the file bytes — proves the streaming path arrives intact.
+
+    Why this exists: the previous code did
+    ``gguf_bytes = gguf_path.read_bytes()`` and ``client.put(..., content=gguf_bytes)``
+    which spikes memory on multi-GB blobs. The streaming rewrite uses an
+    async generator; this test pins that arrival is still byte-identical.
+    """
+    _pin_data_root(monkeypatch, tmp_path)
+    payload = b"\x47\x47\x55\x46" + bytes(range(256)) * 1024  # ~256 KB
+    _seed_adapter(tmp_path, "run-stream", 1, gguf_bytes=payload)
+    recorder = _Recorder()
+    _install_mock_transport(monkeypatch, recorder)
+    monkeypatch.setattr(settings, "ollama_host",
+                        "http://host.docker.internal:11434", raising=False)
+
+    result = await PublishAdapterToOllama().execute(
+        config={"base_model": "qwen3:30b"},
+        context=_ctx(run_id="run-stream", generation=1),
+        engine=None,
+    )
+    assert result.status == "ok", result.message
+    put_request = next(
+        r for r in recorder.requests if r.method == "PUT" and "/blobs/" in str(r.url)
+    )
+    # MockTransport materializes the streamed body into request.content.
+    assert put_request.content == payload
+    assert put_request.headers.get("content-length") == str(len(payload))
+    # Output reports the size we hashed, not 0.
+    assert result.output["gguf_size_bytes"] == len(payload)

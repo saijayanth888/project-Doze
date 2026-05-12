@@ -177,13 +177,20 @@ def crossover(
     keys_a, keys_b = set(weights_a.keys()), set(weights_b.keys())
     if keys_a != keys_b:
         common_keys = keys_a & keys_b
-        # Be strict: < 80% overlap means the parents have incompatible shapes
-        # (different LoRA ranks / different target modules). Refuse rather than
-        # silently producing a half-bred child.
-        if len(common_keys) < int(len(keys_a) * 0.8):
+        # Be strict: < 80% overlap on EITHER side means the parents have
+        # incompatible shapes (different LoRA ranks / different target modules /
+        # different layer counts). Comparing only against the smaller side
+        # missed the "Llama-3.2-1B (16 layers) vs Llama-3.2-3B (28 layers)"
+        # case where the smaller side is fully contained in the larger but
+        # half its keys are absent on the smaller side — produced a half-bred
+        # child that would crash at inference. Refuse rather than silently
+        # merging mismatched architectures.
+        threshold = int(max(len(keys_a), len(keys_b)) * 0.8)
+        if len(common_keys) < threshold:
             raise ValueError(
                 f"crossover: parents incompatible — {len(keys_a)} vs {len(keys_b)} "
-                f"weight tensors, only {len(common_keys)} in common"
+                f"weight tensors, only {len(common_keys)} in common "
+                f"(need ≥{threshold})"
             )
         logger.warning(
             "[crossover] using %d/%d common keys (parents not identical)",
