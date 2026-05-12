@@ -200,6 +200,12 @@ services:
         condition: service_healthy
     volumes:
       - ./data:/app/data
+      # Bridge to the trading-bot's curated-data path. trading-bot's modelforge_ingest.py
+      # + modelforge_curate.py write to /home/saijayanthai/.dgx-train/ on the host;
+      # mf-api needs to read from there. Mounted UNDER /app/data so the path-traversal
+      # guard in training_backend._resolve_curated_path (which requires curated_path
+      # to resolve under settings.resolve_data_root() = /app/data) accepts it.
+      - /home/saijayanthai/.dgx-train:/app/data/dgx-train
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/system/status"]
       interval: 15s

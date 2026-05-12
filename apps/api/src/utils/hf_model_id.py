@@ -32,6 +32,12 @@ _OLLAMA_TAG_TO_HF: dict[str, str] = {
     "qwen2.5-3b": "Qwen/Qwen2.5-3B-Instruct",
     "qwen2.5:7b": "Qwen/Qwen2.5-7B-Instruct",
     "qwen2.5-7b": "Qwen/Qwen2.5-7B-Instruct",
+    "qwen2.5:72b": "Qwen/Qwen2.5-72B-Instruct",
+    "qwen2.5:72b-instruct": "Qwen/Qwen2.5-72B-Instruct",
+    # Qwen 3 — MoE 30B-A3B is the trading-bot's locked base per project_modelforge_decisions
+    "qwen3:30b": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "qwen3-30b": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "qwen3:30b-instruct": "Qwen/Qwen3-30B-A3B-Instruct-2507",
     # Phi 3.5
     "phi3.5": "microsoft/Phi-3.5-mini-instruct",
     "phi3.5:mini": "microsoft/Phi-3.5-mini-instruct",
