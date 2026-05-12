@@ -28,11 +28,14 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from api.deps import get_db
 from services import automation as automation_module
 from services.automation_engine import action_schemas, trigger_schemas
+from services.automation_engine.actions import ACTION_REGISTRY
 from services.automation_engine.triggers import KNOWN_EVENTS
 from services.lineage_db import LineageDB
 
 logger = logging.getLogger("modelforge.routes.workflows")
 router = APIRouter()
+
+_VALID_TRIGGER_TYPES = {"cron", "event", "webhook", "manual"}
 
 
 def _engine_or_503():
@@ -40,6 +43,46 @@ def _engine_or_503():
     if eng is None:
         raise HTTPException(status_code=503, detail="Automation engine not started")
     return eng
+
+
+def _validate_actions_payload(actions: Any) -> None:
+    """Reject shapes that would crash workflow_runner at execution time.
+
+    Without this, a typo in a workflow's ``actions`` array — wrong ``kind``,
+    missing ``kind`` field, ``config`` not a dict — only surfaces when the
+    workflow eventually fires, leaving a red row in the dashboard and
+    confused logs. Validate up-front so the API returns a 400 with the
+    actionable detail.
+    """
+    if not isinstance(actions, list):
+        raise HTTPException(status_code=400, detail="actions must be a list")
+    for idx, step in enumerate(actions):
+        if not isinstance(step, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"actions[{idx}] must be an object",
+            )
+        kind = step.get("kind")
+        if not isinstance(kind, str) or not kind.strip():
+            raise HTTPException(
+                status_code=400,
+                detail=f"actions[{idx}].kind must be a non-empty string",
+            )
+        if kind not in ACTION_REGISTRY:
+            known = sorted(ACTION_REGISTRY.keys())
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"actions[{idx}].kind='{kind}' is not registered. "
+                    f"Known kinds: {known}"
+                ),
+            )
+        cfg = step.get("config", {})
+        if cfg is not None and not isinstance(cfg, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"actions[{idx}].config must be an object or null",
+            )
 
 
 # ── Workflow CRUD ───────────────────────────────────────────────────────
@@ -68,11 +111,10 @@ async def create_workflow(body: dict[str, Any] = Body(...),
     trigger_type = str(body.get("trigger_type") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name required")
-    if trigger_type not in {"cron", "event", "webhook", "manual"}:
+    if trigger_type not in _VALID_TRIGGER_TYPES:
         raise HTTPException(status_code=400, detail="invalid trigger_type")
     actions = body.get("actions") or []
-    if not isinstance(actions, list):
-        raise HTTPException(status_code=400, detail="actions must be a list")
+    _validate_actions_payload(actions)
 
     eng = automation_module.get_engine()
     webhook_secret = (
@@ -111,9 +153,9 @@ async def update_workflow(workflow_id: str, body: dict[str, Any] = Body(...),
         for forbidden in ("name", "kind"):
             if forbidden in body:
                 body.pop(forbidden, None)
-    if "actions" in body and not isinstance(body["actions"], list):
-        raise HTTPException(status_code=400, detail="actions must be a list")
-    if "trigger_type" in body and body["trigger_type"] not in {"cron", "event", "webhook", "manual"}:
+    if "actions" in body:
+        _validate_actions_payload(body["actions"])
+    if "trigger_type" in body and body["trigger_type"] not in _VALID_TRIGGER_TYPES:
         raise HTTPException(status_code=400, detail="invalid trigger_type")
 
     # If swapping into a webhook trigger and no secret is set yet, mint one.
