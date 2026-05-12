@@ -189,19 +189,81 @@ async def _ollama_reachable(client: httpx.AsyncClient, base: str) -> bool:
         return False
 
 
-async def _put_blob(
-    client: httpx.AsyncClient, base: str, gguf_bytes: bytes,
-) -> tuple[bool, str, str]:
-    """Upload a GGUF blob keyed by its sha256 digest."""
-    digest = hashlib.sha256(gguf_bytes).hexdigest()
-    url = f"{base}/api/blobs/sha256:{digest}"
+_BLOB_CHUNK_BYTES = 8 * 1024 * 1024  # 8 MiB — matches typical proxy buffers.
+
+
+def _hash_gguf_streaming(gguf_path: Path) -> tuple[str, int]:
+    """Compute sha256(gguf_path) without loading the file into memory.
+
+    Returns ``(hex_digest, file_size_bytes)``. Quantized 30B LoRAs land in
+    the 5-15GB range; the previous ``read_bytes()`` path doubled that as
+    a Python ``bytes`` object on top of the file cache and tripled it
+    when httpx encoded the body for the PUT.
+    """
+    h = hashlib.sha256()
+    size = 0
+    with gguf_path.open("rb") as f:
+        while True:
+            chunk = f.read(_BLOB_CHUNK_BYTES)
+            if not chunk:
+                break
+            h.update(chunk)
+            size += len(chunk)
+    return h.hexdigest(), size
+
+
+async def _aiter_file_chunks(gguf_path: Path):
+    """Async generator yielding ``_BLOB_CHUNK_BYTES`` reads.
+
+    httpx's AsyncClient ``content=`` accepts an async iterable of bytes
+    and streams the PUT body without buffering the full payload. File
+    IO is delegated to a thread executor so the event loop isn't
+    blocked while reading multi-GB blobs.
+    """
+    loop = asyncio.get_running_loop()
+    f = gguf_path.open("rb")
     try:
-        resp = await client.put(url, content=gguf_bytes)
+        while True:
+            chunk = await loop.run_in_executor(None, f.read, _BLOB_CHUNK_BYTES)
+            if not chunk:
+                return
+            yield chunk
+    finally:
+        f.close()
+
+
+async def _put_blob(
+    client: httpx.AsyncClient,
+    base: str,
+    gguf_path: Path,
+    *,
+    digest: str,
+    content_length: int,
+) -> tuple[bool, str, str]:
+    """Stream a GGUF blob to Ollama, keyed by its sha256 digest.
+
+    Streamed via ``_iter_file_chunks`` to keep peak memory at one chunk
+    (8 MiB) rather than the full blob (5-15 GB for typical quantized
+    adapters on top of a Qwen3-30B / Llama-70B base). ``Content-Length``
+    is set explicitly so httpx doesn't auto-fall-back to chunked
+    transfer-encoding, which some Ollama versions reject.
+    """
+    url = f"{base}/api/blobs/sha256:{digest}"
+    headers = {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": str(content_length),
+    }
+    try:
+        resp = await client.put(
+            url,
+            content=_aiter_file_chunks(gguf_path),
+            headers=headers,
+        )
     except httpx.RequestError as exc:
         return False, digest, f"blob upload network error: {exc}"
     if resp.status_code not in (200, 201):
         return False, digest, f"blob upload HTTP {resp.status_code}: {resp.text[:200]}"
-    return True, digest, "blob uploaded"
+    return True, digest, f"blob uploaded ({content_length / (1024**3):.2f} GiB)"
 
 
 async def _create_model(
@@ -403,9 +465,13 @@ class PublishAdapterToOllama(Action):
             generation=int(generation), run_id=run_id,
         )
 
-        # 5) GGUF bytes (read once).
+        # 5) Compute the digest + size by streaming the file. Loading
+        # the entire blob into memory (a 5-15 GB single ``bytes`` object)
+        # was the failure mode this replaces: it spiked the API
+        # container's RSS hard enough to trigger the cgroup OOM-killer
+        # on the unified-memory host.
         try:
-            gguf_bytes = gguf_path.read_bytes()
+            digest, gguf_size = _hash_gguf_streaming(gguf_path)
         except OSError as exc:
             return ActionResult(
                 status="error",
@@ -438,7 +504,10 @@ class PublishAdapterToOllama(Action):
                     },
                 )
 
-            put_ok, digest, put_msg = await _put_blob(client, base, gguf_bytes)
+            put_ok, _, put_msg = await _put_blob(
+                client, base, gguf_path,
+                digest=digest, content_length=gguf_size,
+            )
             if not put_ok:
                 return ActionResult(
                     status="error",
@@ -490,7 +559,7 @@ class PublishAdapterToOllama(Action):
             "track_id": track_id,
             "adapter_dir": str(adapter_dir),
             "gguf_path": str(gguf_path),
-            "gguf_size_bytes": len(gguf_bytes),
+            "gguf_size_bytes": gguf_size,
             "digest": digest,
             "ollama_host": base,
             "conversion_note": conversion_note,
