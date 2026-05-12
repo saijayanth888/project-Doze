@@ -38,10 +38,33 @@ _OLLAMA_TAG_TO_HF: dict[str, str] = {
     "qwen3:30b": "Qwen/Qwen3-30B-A3B-Instruct-2507",
     "qwen3-30b": "Qwen/Qwen3-30B-A3B-Instruct-2507",
     "qwen3:30b-instruct": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    # Qwen 3 Next — 80B MoE with 3B active params, 256k context.
+    "qwen3-next:80b": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+    "qwen3-next-80b": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+    "qwen3-next:80b-a3b": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+    # DeepSeek-R1 distillations (Ollama publishes these under deepseek-r1:* tags).
+    "deepseek-r1:8b": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "deepseek-r1-8b": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "deepseek-r1:1.5b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    "deepseek-r1:7b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    "deepseek-r1:14b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+    "deepseek-r1:32b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+    "deepseek-r1:70b": "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+    # Gemma 3 (Google's 2026 release; common ollama tags).
+    "gemma3:1b": "google/gemma-3-1b-it",
+    "gemma3:4b": "google/gemma-3-4b-it",
+    "gemma3:12b": "google/gemma-3-12b-it",
+    "gemma3:27b": "google/gemma-3-27b-it",
+    "gemma3-27b": "google/gemma-3-27b-it",
     # Phi 3.5
     "phi3.5": "microsoft/Phi-3.5-mini-instruct",
     "phi3.5:mini": "microsoft/Phi-3.5-mini-instruct",
     "phi3.5-mini": "microsoft/Phi-3.5-mini-instruct",
+    # Phi 4 (Microsoft's late-2025/early-2026 release).
+    "phi4": "microsoft/phi-4",
+    "phi4:14b": "microsoft/phi-4",
+    "phi-4": "microsoft/phi-4",
+    "phi-4:14b": "microsoft/phi-4",
     # Mistral 7B
     "mistral:7b": "mistralai/Mistral-7B-Instruct-v0.3",
     "mistral-7b": "mistralai/Mistral-7B-Instruct-v0.3",
