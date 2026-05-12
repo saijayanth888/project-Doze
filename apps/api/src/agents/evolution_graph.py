@@ -85,6 +85,7 @@ class EvolutionState(TypedDict, total=False):
     trained_benchmark_delta: float | None
     held_out_benchmark_delta: float | None
     regression_report: dict[str, Any] | None
+    trading_tiebreaker_report: dict[str, Any] | None
     eval_seconds: float
     harness_version: str
     stderrs: dict[str, float]
@@ -669,6 +670,53 @@ def build_graph(
                 },
                 generation=state.get("generation"),
             )
+
+        # ── Trading-track tiebreaker veto (additive) ─────────────────────
+        # Per trading-bot's locked decision #3, certain tracks have a
+        # priority metric (e.g. predictive_hit_rate_30d for reflector,
+        # downstream_pnl_per_decision for arbiter). When that metric
+        # regresses more than the configured threshold (default 5%) vs the
+        # parent, the candidate is rolled back regardless of Pareto. Only
+        # fires when config["track_id"] is a registered trading track --
+        # standard MMLU/GSM8K runs are untouched.
+        cfg_for_tiebreak = state.get("config") or {}
+        track_id_tb = str(cfg_for_tiebreak.get("track_id") or "").strip()
+        if state["decision"] == "promote" and track_id_tb.startswith("trading-"):
+            try:
+                from config.trading_eval_weights import check_tiebreaker
+                tb = check_tiebreaker(
+                    track_id_tb,
+                    state.get("parent_scores"),
+                    state.get("child_scores"),
+                )
+                state["trading_tiebreaker_report"] = tb
+                if tb.get("rollback"):
+                    state["decision"] = "discard"
+                    state["decision_reason"] = (
+                        f"{tb.get('reason')} "
+                        f"(prior reason: {state.get('decision_reason') or 'n/a'})"
+                    ).strip()
+                    run_events.publish(
+                        state.get("run_id", ""),
+                        phase="decide",
+                        level="warn",
+                        label="Trading tiebreaker veto — generation discarded",
+                        sub=str(tb.get("reason"))[:300],
+                        metric={
+                            "metric": tb.get("metric"),
+                            "parent": tb.get("parent"),
+                            "child": tb.get("child"),
+                            "delta_pct": tb.get("delta_pct"),
+                            "threshold_pct": tb.get("threshold_pct"),
+                        },
+                        generation=state.get("generation"),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                # Tiebreaker is additive -- never block a run if the import
+                # or comparison fails. Fall through to whatever Pareto said.
+                logger.warning(
+                    "[tiebreaker] check failed for track=%s: %s", track_id_tb, exc,
+                )
 
         await _emit(state, "compare_to_champion")
         return state
