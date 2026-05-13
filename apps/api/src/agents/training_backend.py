@@ -221,10 +221,31 @@ class LoRATrainingBackend:
 
     @staticmethod
     def _format_sample(example: dict) -> str:
+        # Accept any of the common SFT field aliases for the user-side text.
+        # The HuggingFace curator emits `instruction`; OpenOrca and many
+        # benchmark seed sets use `question`; trading-bot's modelforge_curate
+        # also writes `instruction`. Falling back across the set makes the
+        # trainer tolerant of dataset shape without requiring upstream
+        # normalisation passes.
+        user_text = (
+            example.get("question")
+            or example.get("instruction")
+            or example.get("prompt")
+            or example.get("user_message")
+            or example.get("input")
+            or ""
+        )
+        assistant_text = (
+            example.get("response")
+            or example.get("answer")
+            or example.get("output")
+            or example.get("completion")
+            or ""
+        )
         return (
             "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n"
-            f"{example['question']}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
-            f"{example['response']}<|eot_id|>"
+            f"{user_text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+            f"{assistant_text}<|eot_id|>"
         )
 
     def _train_sync(self, run_id: str, generation: int, config: dict) -> TrainingResult:
