@@ -408,16 +408,42 @@ class PublishAdapterToHuggingFace(Action):
             # The heavyweight call — streams 3-4 GB to HF Hub. Must run
             # in a worker thread or the event loop hangs for the entire
             # upload duration.
+            #
+            # `upload_large_folder` (NOT `upload_folder`) is HF's officially
+            # recommended path for multi-GB folders. Per huggingface_hub docs
+            # /guides/upload § "Upload a large folder":
+            #
+            #   * resumable — caches per-file hash/preupload state under
+            #     <folder_path>/cache/huggingface so an interrupted upload
+            #     resumes from where it stopped on the next call
+            #   * multi-threaded — parallel hashing + parallel pre-upload
+            #   * resilient to errors — retries each independent task
+            #     indefinitely (transient network / 5xx / TLS handshake
+            #     failures no longer wedge the whole upload like
+            #     upload_folder did mid-stream)
+            #
+            # Trade-offs we accept (per the docs):
+            #   * no custom commit_message (multiple commits get made)
+            #   * no custom path_in_repo
+            #   * branch must exist BEFORE the call — we already create
+            #     it explicitly via `create_branch(... exist_ok=True)` above
+            #
+            # Multiplied by HF_XET_HIGH_PERFORMANCE=1 + HF_XET_CACHE on
+            # local disk (set on mf-api in docker-compose), the actual
+            # throughput is ~5-10× the old upload_folder path. `commit_info`
+            # is None from upload_large_folder (it makes multiple commits
+            # internally), but the function returns once everything is
+            # committed, which is what we need.
             commit_info = await asyncio.to_thread(
                 partial(
-                    api.upload_folder,
+                    api.upload_large_folder,
                     repo_id=repo_id,
                     folder_path=str(adapter_dir),
                     repo_type="model",
                     revision=revision,
-                    commit_message=f"Promote {track_id} gen-{generation} ({run_id})",
                     allow_patterns=allow_patterns,
                     ignore_patterns=_DEFAULT_IGNORE_PATTERNS,
+                    print_report=False,
                 )
             )
         except HfHubHTTPError as exc:

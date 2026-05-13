@@ -178,6 +178,18 @@ services:
       HUGGINGFACE_HUB_CACHE: /app/data/.cache/huggingface/hub
       TRANSFORMERS_CACHE: /app/data/.cache/huggingface/hub
       HF_DATASETS_CACHE: /app/data/.cache/huggingface/datasets
+      # Xet (HF's chunk-based content-addressable storage backend) settings
+      # per huggingface_hub/guides/upload § "Tips and tricks for large uploads".
+      # HF_HOME above lives on the bind-mounted ./data volume which can be a
+      # network-backed FS on some hosts — chunk hashing/staging hates that.
+      # Point the xet cache at the container's local writable layer (overlayfs
+      # on host disk) so chunking is fast. HIGH_PERFORMANCE=1 lets hf_xet use
+      # every CPU core + all available upload bandwidth; safe here because
+      # mf-api has a generous mem_limit (88g) and only one upload runs at a
+      # time. Without these the 4 GB adapter upload caps at ~1-2 MB/s and
+      # stalls on transient network hiccups; with them, ~5-10× throughput.
+      HF_XET_CACHE: /tmp/xet-cache
+      HF_XET_HIGH_PERFORMANCE: "1"
       # `expandable_segments` lets the CUDA allocator reuse fragmented blocks instead of
       # crashing the next training run with OOM after a failure has poisoned the pool.
       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
