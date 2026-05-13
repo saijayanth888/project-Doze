@@ -226,11 +226,80 @@ def build_graph(
         return state
 
     async def generate_training(state: EvolutionState) -> EvolutionState:
+        cfg = state.get("config", {}) or {}
+
+        # ── Preset curated dataset short-circuit ──────────────────────────────
+        # When the caller hands us a curated dataset directly (e.g. trading-bot's
+        # nightly modelforge_ingest.py + modelforge_curate.py write HF-Arrow
+        # shards to ~/.dgx-train/datasets/<track>/curated/, surfaced inside the
+        # container at /app/data/dgx-train/datasets/<track>/curated/), skip the
+        # weakness-driven HF download. Pulling 1764 generic samples from
+        # mmlu/arc_challenge/hellaswag/gsm8k/humanevalpack only to have the
+        # trainer ignore them (the trainer prefers config["curated_path"] over
+        # state["training_data_path"], see training_backend.py:_lora_train) was
+        # 1-2 min and ~50 MB of wasted work per run and a misleading
+        # "curated 1764 samples" UX. Now we surface the real dataset path/size.
+        preset_curated = cfg.get("curated_path")
+        track_id = state.get("track_id") or cfg.get("track_id") or ""
+        if preset_curated:
+            try:
+                from agents.training_backend import _resolve_curated_path
+                safe = _resolve_curated_path(preset_curated)
+            except Exception:
+                safe = None
+            if safe is not None and safe.is_dir():
+                _phase_start(
+                    state,
+                    phase="curate",
+                    label=f"Using preset curated dataset (track={track_id or 'unknown'})",
+                    sub=f"path={safe}",
+                )
+                num_samples = 0
+                try:
+                    import json as _json
+                    meta_p = safe / "mf_meta.json"
+                    if meta_p.exists():
+                        with meta_p.open() as fh:
+                            num_samples = int(_json.load(fh).get("num_samples") or 0)
+                    if num_samples <= 0:
+                        from datasets import load_from_disk  # lazy
+                        num_samples = int(len(load_from_disk(str(safe))))
+                except Exception as exc:
+                    logger.warning("[training-data] preset size probe failed: %s", exc)
+                state["training_data_path"] = str(safe)
+                state["training_data_size"] = num_samples
+                state["curated_sample_count"] = num_samples
+                state["self_generated_count"] = 0
+                # Trading tracks don't slot into ALL_BENCHMARKS — leave the
+                # methodology bookkeeping fields populated with the track_id
+                # so downstream consumers can still distinguish the run.
+                state["trained_benchmarks"] = [track_id] if track_id else []
+                state["held_out_benchmarks"] = []
+                run_events.publish(
+                    state.get("run_id", ""),
+                    phase="curate",
+                    label=f"Preset curated dataset — {num_samples} samples",
+                    sub=f"track={track_id or 'unknown'} · path={safe}",
+                    generation=state.get("generation"),
+                )
+                logger.info(
+                    "[training-data] preset curated_path=%s track=%s samples=%d — skipped weakness curator",
+                    safe, track_id, num_samples,
+                )
+                await _emit(state, "generate_training")
+                return state
+            else:
+                logger.warning(
+                    "[training-data] preset curated_path=%r unusable (resolver rejected or not a dir) — "
+                    "falling through to weakness-driven curation",
+                    preset_curated,
+                )
+
         weak = state.get("weak_categories") or ["mmlu", "arc_challenge", "hellaswag", "gsm8k", "humaneval"]
         report = state.get("weakness_report", "No analysis available")
         logger.info("[training-data] targeting %d categories: %s", len(weak), weak)
 
-        max_samples = int((state.get("config") or {}).get("max_samples") or 3000)
+        max_samples = int(cfg.get("max_samples") or 3000)
         _phase_start(
             state,
             phase="curate",
@@ -239,7 +308,7 @@ def build_graph(
         )
         # Inject run_id into the config so the curator can publish per-dataset
         # progress events under the correct buffer key.
-        cfg_for_curate = {**(state.get("config", {}) or {}), "run_id": state.get("run_id", "")}
+        cfg_for_curate = {**cfg, "run_id": state.get("run_id", "")}
         try:
             result: CurationResult = await curator.curate(
                 weak_categories=weak,
