@@ -33,10 +33,12 @@ Design rules (operator-friendly degradation):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
@@ -316,8 +318,21 @@ class PublishAdapterToHuggingFace(Action):
         # 6) Verify the repo exists (cheap GET). Distinguish 404 (operator
         # must create) from 401/403 (token has no scope) from network
         # errors (HF is just down).
+        # All ``api.*`` calls below are synchronous huggingface_hub HTTP
+        # operations. The upload_folder call in particular streams the
+        # entire 3-4 GB safetensors blob over the network and can hold the
+        # connection open for 20+ minutes. Running that on the API's
+        # asyncio event loop bricks every other endpoint until the upload
+        # completes — Docker marks the container unhealthy, /api/forge/tracks
+        # times out from the dashboard's 3.5s probe, and operators see
+        # "model forge is down" even though the process is alive. Wrap all
+        # blocking HF calls in asyncio.to_thread so they run on a worker
+        # thread and the event loop stays free to service /api/system/status,
+        # /api/forge/tracks, /api/evolve/*, etc.
         try:
-            api.repo_info(repo_id=repo_id, repo_type="model")
+            await asyncio.to_thread(
+                partial(api.repo_info, repo_id=repo_id, repo_type="model")
+            )
         except RepositoryNotFoundError:
             return ActionResult(
                 status="error",
@@ -365,8 +380,9 @@ class PublishAdapterToHuggingFace(Action):
         # create_branch; we do that explicitly so a partial upload still
         # produces a ref we can clean up.
         try:
-            api.create_branch(
-                repo_id=repo_id, branch=revision, exist_ok=True,
+            await asyncio.to_thread(
+                partial(api.create_branch,
+                        repo_id=repo_id, branch=revision, exist_ok=True)
             )
         except AttributeError:
             # Older API lacks create_branch — upload_folder will create
@@ -389,14 +405,20 @@ class PublishAdapterToHuggingFace(Action):
             )
 
         try:
-            commit_info = api.upload_folder(
-                repo_id=repo_id,
-                folder_path=str(adapter_dir),
-                repo_type="model",
-                revision=revision,
-                commit_message=f"Promote {track_id} gen-{generation} ({run_id})",
-                allow_patterns=allow_patterns,
-                ignore_patterns=_DEFAULT_IGNORE_PATTERNS,
+            # The heavyweight call — streams 3-4 GB to HF Hub. Must run
+            # in a worker thread or the event loop hangs for the entire
+            # upload duration.
+            commit_info = await asyncio.to_thread(
+                partial(
+                    api.upload_folder,
+                    repo_id=repo_id,
+                    folder_path=str(adapter_dir),
+                    repo_type="model",
+                    revision=revision,
+                    commit_message=f"Promote {track_id} gen-{generation} ({run_id})",
+                    allow_patterns=allow_patterns,
+                    ignore_patterns=_DEFAULT_IGNORE_PATTERNS,
+                )
             )
         except HfHubHTTPError as exc:
             code = _http_status_code(exc)
@@ -444,10 +466,13 @@ class PublishAdapterToHuggingFace(Action):
         # 8) Tag the commit so it survives a future branch rename.
         tag_warning: str | None = None
         try:
-            api.create_tag(
-                repo_id=repo_id, tag=revision,
-                revision=revision, repo_type="model",
-                exist_ok=True,
+            await asyncio.to_thread(
+                partial(
+                    api.create_tag,
+                    repo_id=repo_id, tag=revision,
+                    revision=revision, repo_type="model",
+                    exist_ok=True,
+                )
             )
         except HfHubHTTPError as exc:
             tag_warning = f"tag_create_failed: HTTP {_http_status_code(exc)}"
@@ -465,7 +490,9 @@ class PublishAdapterToHuggingFace(Action):
             run_id=run_id,
         )
         try:
-            refs = api.list_repo_refs(repo_id=repo_id, repo_type="model")
+            refs = await asyncio.to_thread(
+                partial(api.list_repo_refs, repo_id=repo_id, repo_type="model")
+            )
             existing_tags = sorted(
                 t.name for t in (refs.tags or [])
                 if prefix and t.name.startswith(prefix)
@@ -476,7 +503,10 @@ class PublishAdapterToHuggingFace(Action):
                     if tag == revision:
                         continue  # never prune the version we just made
                     try:
-                        api.delete_tag(repo_id=repo_id, tag=tag, repo_type="model")
+                        await asyncio.to_thread(
+                            partial(api.delete_tag,
+                                    repo_id=repo_id, tag=tag, repo_type="model")
+                        )
                         pruned.append(tag)
                     except Exception as exc:
                         prune_warning = (
