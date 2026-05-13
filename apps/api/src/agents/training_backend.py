@@ -327,6 +327,26 @@ class LoRATrainingBackend:
             model = PeftModel.from_pretrained(model, str(parent_adapter))
             model = model.merge_and_unload()
 
+        # PEFT's lora.ParamWrapper (used internally for MoE expert routing
+        # weights — Qwen3-30B-A3B, Qwen3-Next-80B-A3B, deepseek-v2, Mixtral)
+        # raises NotImplementedError when lora_dropout != 0:
+        #     "lora.ParamWrapper does not work with lora_dropout != 0."
+        # The default 0.05 dropout is fine on dense models (Llama, Qwen2.5
+        # non-MoE, Phi, etc.) but trips this guard on every MoE base. Detect
+        # by checking the resolved HF id for known MoE family markers and
+        # force dropout to 0 in that case, with a logged WARNING so the
+        # operator can see the override took effect.
+        _lora_dropout = float(config.get("lora_dropout", 0.05))
+        _bm_lower = str(base_model).lower()
+        _MOE_MARKERS = ("a3b", "moe", "mixtral", "deepseek-v2", "deepseek-v3", "qwen3-next")
+        if _lora_dropout != 0.0 and any(m in _bm_lower for m in _MOE_MARKERS):
+            logger.warning(
+                "[lora-train] base=%s is MoE; PEFT lora.ParamWrapper requires "
+                "lora_dropout=0 (was %.3f). Overriding.",
+                base_model, _lora_dropout,
+            )
+            _lora_dropout = 0.0
+
         lora_cfg = LoraConfig(
             r=int(config.get("lora_rank", 16)),
             lora_alpha=int(config.get("lora_alpha", 32)),
@@ -334,7 +354,7 @@ class LoRATrainingBackend:
                 config.get("target_modules")
                 or get_lora_target_modules(base_model)
             ),
-            lora_dropout=float(config.get("lora_dropout", 0.05)),
+            lora_dropout=_lora_dropout,
             bias="none",
             task_type="CAUSAL_LM",
         )
