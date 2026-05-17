@@ -3,7 +3,15 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
+# Upgrade npm to a version that supports `minimumReleaseAge` (landed in 11.6.1,
+# Sept 2025), then bake a 48h release-age cooldown into the image so `npm ci`
+# refuses package versions published in the last 2 days — defends against
+# fast-yanked supply-chain compromises (Shai-Hulud, Qix, Mini Shai-Hulud).
+RUN npm install -g npm@11.6.1 \
+    && npm config set minimumReleaseAge 2880 --global
+
 COPY apps/web/frontend/package*.json ./
+COPY apps/web/frontend/.npmrc ./.npmrc
 RUN npm ci --prefer-offline --no-audit --no-fund
 
 COPY apps/web/frontend/ ./

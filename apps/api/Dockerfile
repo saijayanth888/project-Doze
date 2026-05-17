@@ -21,27 +21,32 @@ ENV PYTHONUNBUFFERED=1 \
     MODELFORGE_LLAMA_CPP_CONVERT=/opt/llama.cpp/convert_lora_to_gguf.py
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl tini \
+    && apt-get install -y --no-install-recommends curl git tini \
     && rm -rf /var/lib/apt/lists/*
 
-# llama.cpp's convert_lora_to_gguf.py — bundled at a pinned commit so the
-# publish_adapter_to_ollama action has a working converter without
-# depending on a host-side llama.cpp install. Pinned to a known-good
-# commit on the ggml-org fork (the repo moved from ggerganov in 2026).
-# Audit 2026-05-17: the absence of this script was the silent root cause
-# of zero adapters reaching production for 4+ days.
+# llama.cpp — shallow-clone at a pinned commit so the
+# publish_adapter_to_ollama action has a working LoRA→GGUF converter
+# without depending on a host-side llama.cpp install. We need the full
+# conversion/ package (convert_lora_to_gguf.py imports
+# `from conversion import LazyTorchTensor, ModelBase, get_model_class`)
+# plus convert_hf_to_gguf.py and gguf-py — fetching individual files
+# missed transitive deps and broke at first invocation
+# (audit 2026-05-17 attempt 1).
 #
-# Bump LLAMA_CPP_COMMIT if upstream changes the converter API or moves
-# the gguf-py layout. The auxiliary convert_hf_to_gguf.py is fetched
-# alongside so the merge-then-quantize path is available as a
-# follow-up without a second image rebuild.
+# Bump LLAMA_CPP_COMMIT if upstream changes the converter API. Shallow
+# clone keeps the layer size minimal (~30 MB of Python).
 ARG LLAMA_CPP_COMMIT=87589042cac2c390cec8d68fb2fad64e0a2a252a
-RUN mkdir -p /opt/llama.cpp \
-    && curl -fsSL "https://raw.githubusercontent.com/ggml-org/llama.cpp/${LLAMA_CPP_COMMIT}/convert_lora_to_gguf.py" \
-        -o /opt/llama.cpp/convert_lora_to_gguf.py \
-    && curl -fsSL "https://raw.githubusercontent.com/ggml-org/llama.cpp/${LLAMA_CPP_COMMIT}/convert_hf_to_gguf.py" \
-        -o /opt/llama.cpp/convert_hf_to_gguf.py \
-    && chmod +x /opt/llama.cpp/convert_lora_to_gguf.py
+RUN git clone --depth 1 https://github.com/ggml-org/llama.cpp.git /opt/llama.cpp.git \
+    && cd /opt/llama.cpp.git \
+    && git fetch --depth 1 origin ${LLAMA_CPP_COMMIT} \
+    && git checkout ${LLAMA_CPP_COMMIT} \
+    && mkdir -p /opt/llama.cpp \
+    && cp convert_lora_to_gguf.py convert_hf_to_gguf.py /opt/llama.cpp/ \
+    && cp -r conversion /opt/llama.cpp/ \
+    && cp -r gguf-py /opt/llama.cpp/ \
+    && chmod +x /opt/llama.cpp/convert_lora_to_gguf.py \
+    && rm -rf /opt/llama.cpp.git
+ENV PYTHONPATH=/app/src:/opt/llama.cpp:/opt/llama.cpp/gguf-py
 
 RUN groupadd --system --gid 1000 app \
     && useradd --system --uid 1000 --gid app --shell /usr/sbin/nologin app \
