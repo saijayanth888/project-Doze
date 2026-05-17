@@ -6,14 +6,15 @@ These wrap three concerns each eval module needs:
    by the trading-bot exporter (one JSONL per role); the trading-bot side owns
    the schema, we just consume.
 2. **Adapter inference**  -- batch-call the candidate adapter and return its raw
-   text outputs. In production this hands off to ``peft_inference.run_with_adapter``;
-   in tests it's injected so we can stay GPU-free.
-3. **LLM-as-judge**  -- pairwise / rubric-score helper. Injectable for tests.
+   text outputs. In production this hands off to ``peft_inference.run_with_adapter``
+   on GPU hosts. On CPU-only hosts the runner returns empty strings so that
+   tests can inject their own runner without depending on GPU presence.
+3. **LLM-as-judge**  -- pairwise / rubric-score helper backed by a DIFFERENT
+   model family than the student (qwen3:8b default) to avoid same-author bias.
+   Injectable for tests.
 
-All public helpers accept callable hooks (``adapter_runner=`` and ``judge=``) so
-the eval modules stay trivially mockable. The defaults route to the in-process
-PEFT inference helper at import time only when ``MODELFORGE_EVAL_USE_PEFT=1``
-to keep the test suite GPU-free.
+MODELFORGE_EVAL_USE_PEFT has been removed. GPU-presence detection via
+``utils.gpu.get_gpu_status()`` drives the adapter runner instead.
 """
 
 from __future__ import annotations
@@ -81,22 +82,29 @@ def load_test_set(test_set_path: str | os.PathLike) -> list[dict[str, Any]]:
 # Adapter inference
 # ---------------------------------------------------------------------
 def default_adapter_runner(adapter_path: str, prompts: list[str]) -> list[str]:
-    """Production adapter runner -- thin wrapper over ``peft_inference``.
+    """Production adapter runner — GPU-gated, no env-var toggle.
 
-    Returns an empty-string response for every prompt when PEFT is not
-    available (Mac dev, tests). Wired into modelforge's existing
-    ``peft_inference.run_with_adapter_sync`` helper at runtime so the
-    same warm-cache model serves both /api/forge/query and our evals.
+    On CPU-only hosts (test environments, Mac dev): returns empty strings for
+    every prompt. Tests MUST inject their own ``adapter_runner=`` lambda;
+    no test should rely on this function producing real output on a GPU-absent
+    host.
+
+    On GPU hosts: imports and calls ``services.peft_inference.run_with_adapter_sync``.
+    Raises ``RuntimeError`` if peft_inference is missing on a GPU host — that
+    is a misconfigured deployment, not a graceful degradation case.
+
+    The ``MODELFORGE_EVAL_USE_PEFT`` env var has been removed. GPU detection
+    is the sole gate.
     """
-    use_peft = os.environ.get("MODELFORGE_EVAL_USE_PEFT", "").lower() in {"1", "true", "yes"}
-    if not use_peft:
+    from utils.gpu import get_gpu_status
+    if not get_gpu_status().get("gpu_available"):
+        # Non-GPU env: tests must inject their own runner.
         return ["" for _ in prompts]
     try:
-        # Lazy import -- peft_inference pulls torch which we want to avoid on Mac.
         from services import peft_inference  # type: ignore
     except ImportError as exc:
-        logger.warning("[trading-eval] peft_inference unavailable, returning blanks: %s", exc)
-        return ["" for _ in prompts]
+        logger.error("[trading-eval] peft_inference unavailable on GPU host: %s", exc)
+        raise RuntimeError("GPU host must have peft_inference installed") from exc
     out: list[str] = []
     for prompt in prompts:
         try:
@@ -113,13 +121,89 @@ def default_adapter_runner(adapter_path: str, prompts: list[str]) -> list[str]:
     return out
 
 
-def default_judge(_prompt: str, _resp_a: str, _resp_b: str) -> float:
-    """Tie-by-default judge. Production overrides with an Ollama hermes3:8b call."""
+def default_judge(prompt: str, resp_a: str, resp_b: str) -> float:
+    """Real Ollama judge from a DIFFERENT model family than the student.
+
+    The student is hermes3:8b + LoRA. This judge uses qwen3:8b (different
+    family) by default to avoid same-author evaluation bias. Falls back to
+    0.5 on failure but logs an ERROR.
+
+    Override the judge model via ``MODELFORGE_JUDGE_MODEL`` env var. Setting
+    it to any hermes3:* value raises ``ValueError`` (same-family guard).
+
+    Validated for discriminative capacity in test_default_judge_discriminates.
+    """
+    import httpx
+    from config.settings import settings
+
+    judge_model = os.environ.get("MODELFORGE_JUDGE_MODEL", "qwen3:8b")
+    if judge_model.startswith("hermes3"):
+        raise ValueError(
+            f"MODELFORGE_JUDGE_MODEL={judge_model!r} is same family as student (hermes3); "
+            "choose a different model family (qwen3, phi3.5, mistral)."
+        )
+
+    judge_prompt = (
+        f"Prompt given to the analyst:\n{prompt[:800]}\n\n"
+        f"Response A:\n{resp_a[:600]}\n\nResponse B:\n{resp_b[:600]}\n\n"
+        'Which response is better for a trading decision? Reply ONLY with a JSON object: '
+        '{"preference": "A" or "B" or "tie", "score_a": 0.0-1.0, "score_b": 0.0-1.0, "reason": "..."}'
+    )
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.post(
+                f"{settings.ollama_host.rstrip('/')}/api/generate",
+                json={"model": judge_model, "prompt": judge_prompt, "stream": False},
+            )
+        blob = r.json().get("response", "")
+        m = re.search(r"\{.*\}", blob, re.DOTALL)
+        if m:
+            parsed = json.loads(m.group(0))
+            return float(parsed.get("score_a", 0.5))
+    except Exception as exc:
+        logger.warning("[trading-eval] judge call failed (%s): %s", judge_model, exc)
     return 0.5
 
 
-def default_rubric_scorer(_prompt: str, _response: str, _rubric: str) -> float:
-    """Conservative 0.5 baseline when no real judge is wired in."""
+def default_rubric_scorer(prompt: str, response: str, rubric: str) -> float:
+    """Real Ollama rubric scorer using the same judge model as default_judge.
+
+    Sends a 1-5 rubric prompt and rescales to [0, 1] via ``(raw - 1) / 4``.
+    On any failure, returns 0.5 (not 0.0) to avoid false metric collapse
+    due to transient Ollama unavailability.
+    """
+    import httpx
+    from config.settings import settings
+
+    judge_model = os.environ.get("MODELFORGE_JUDGE_MODEL", "qwen3:8b")
+    if judge_model.startswith("hermes3"):
+        raise ValueError(
+            f"MODELFORGE_JUDGE_MODEL={judge_model!r} is same family as student; "
+            "choose a different model family."
+        )
+
+    rubric_prompt = (
+        f"Rubric:\n{rubric}\n\n"
+        f"Prompt given to the analyst:\n{prompt[:600]}\n\n"
+        f"Response:\n{response[:800]}\n\n"
+        'Score this response 1-5 per the rubric above. '
+        'Reply ONLY with a JSON object: {"score": 1-5, "reason": "brief explanation"}'
+    )
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.post(
+                f"{settings.ollama_host.rstrip('/')}/api/generate",
+                json={"model": judge_model, "prompt": rubric_prompt, "stream": False},
+            )
+        blob = r.json().get("response", "")
+        m = re.search(r"\{.*\}", blob, re.DOTALL)
+        if m:
+            parsed = json.loads(m.group(0))
+            raw = float(parsed.get("score", 3.0))
+            # Rescale 1-5 to [0, 1]
+            return clamp01((raw - 1.0) / 4.0)
+    except Exception as exc:
+        logger.error("[trading-eval] rubric_scorer call failed (%s): %s", judge_model, exc)
     return 0.5
 
 
