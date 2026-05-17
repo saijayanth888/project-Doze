@@ -784,6 +784,12 @@ try:  # pragma: no cover -- the import side-effect IS the test
 except Exception as exc:  # pragma: no cover -- defensive only
     logger.warning("[actions] failed to load HF publish action: %s", exc)
 
+try:  # pragma: no cover -- the import side-effect IS the test
+    from agents.actions import dataset_build_trading as _build_trading_module
+    _ = _build_trading_module  # touched so linters don't drop the import
+except Exception as exc:  # pragma: no cover -- defensive only
+    logger.warning("[actions] failed to load dataset_build_trading action: %s", exc)
+
 
 def action_schemas() -> list[dict[str, Any]]:
     """All actions exposed to the UI form builder."""

@@ -161,7 +161,12 @@ async def execute_workflow(
         step_traces.append(trace)
 
         # Feed this step's output into the context for the next step's templating.
-        context["last"] = result.output or {}
+        # Include "status" in context["last"] so the last_action_status condition
+        # operator in conditions.py can gate downstream steps (e.g. the
+        # dataset.build_trading → evolution.start chain in Sunday workflows).
+        last_ctx = dict(result.output or {})
+        last_ctx["status"] = result.status
+        context["last"] = last_ctx
         # Also expose under the action kind for convenience:
         # `{cleanup.adapters.deleted}` works after a CleanupAdapters step.
         context[kind] = result.output or {}

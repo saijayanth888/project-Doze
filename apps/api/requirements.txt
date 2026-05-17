@@ -24,6 +24,14 @@ croniter>=2.0,<3
 # Paper-grade chart exports (/api/export/evolution-curves, lineage-tree).
 matplotlib>=3.8,<4
 
+# Trading-bot script dependencies — required so modelforge_ingest.py and
+# modelforge_curate.py can be invoked as subprocesses from BuildTradingDataset.
+# pandas: curate.py uses datasets.Dataset.from_list which implicitly uses pandas.
+# psycopg2-binary: BuildTradingDataset DB connectivity probe + modelforge_ingest_decisions.py.
+# (asyncpg is already above; pinned range respects the 48h supply-chain cooldown policy.)
+pandas>=2.0,<3.0
+psycopg2-binary>=2.9,<3.0
+
 # GPU dependencies (DGX Spark only).
 # Versions pinned to what the DGX Spark image is actually running today
 # (verified via `python -c "import torch, transformers, trl, peft; ..."`).

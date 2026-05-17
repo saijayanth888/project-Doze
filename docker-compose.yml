@@ -200,6 +200,14 @@ services:
       # repeatedly forks the process and the pool prints loud `huggingface/tokenizers`
       # warnings while doing nothing useful. Disable it.
       TOKENIZERS_PARALLELISM: "false"
+      # Trading-bot database URL — used by BuildTradingDataset.execute() for the
+      # SELECT 1 connectivity probe and by modelforge_ingest_decisions.py for the
+      # one-shot decisions bootstrap ETL.
+      # Port 5434: trading-bot's Postgres is exposed on host:5434 to avoid
+      # conflicting with ModelForge's mf-postgres on 5433 (confirmed in
+      # trading-bot/docker-compose.yml line 15).
+      # host.docker.internal resolves via extra_hosts: host-gateway above.
+      TRADEBOT_DATABASE_URL: ${TRADEBOT_DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:5434/postgres}
     expose:
       - "8000"
     ports:
@@ -218,6 +226,10 @@ services:
       # guard in training_backend._resolve_curated_path (which requires curated_path
       # to resolve under settings.resolve_data_root() = /app/data) accepts it.
       - /home/saijayanthai/.dgx-train:/app/data/dgx-train
+      # Trading-bot scripts bind-mount: gives the mf-api container access to
+      # modelforge_ingest.py + modelforge_curate.py via subprocess calls from
+      # BuildTradingDataset.execute(). Read-only: the container never modifies scripts.
+      - ~/Documents/trading-bot/scripts:/app/trading-bot/scripts:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/system/status"]
       interval: 15s

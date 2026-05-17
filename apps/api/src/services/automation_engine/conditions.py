@@ -86,6 +86,35 @@ def _is_truthy(args, ctx):
     return bool(evaluate(args[0] if isinstance(args, list) else args, ctx))
 
 
+def _last_action_status(args, ctx):
+    """``{"last_action_status": "ok"}`` — true when the previous action's status
+    matches *args*.
+
+    This is the primary gate for chaining dataset-build → evolution-start in
+    the Sunday trading-track rebuild workflows. The value at ``context["last"]``
+    is the previous action's ``ActionResult.output`` (or ``{}`` on the first
+    step), augmented with ``"status"`` from the trace.
+
+    Usage::
+
+        {"last_action_status": "ok"}   # only fire if previous step succeeded
+        {"last_action_status": "skipped"}  # run if previous step was skipped
+
+    The status is set by ``workflow_runner.py`` at::
+
+        context["last"] = result.output or {}
+        context["last"]["status"] = result.status
+
+    The operator is a shorthand for::
+
+        {"==": [{"var": "last.status"}, "ok"]}
+    """
+    expected = str(args) if not isinstance(args, str) else args
+    last = ctx.get("last") or {}
+    actual = str(last.get("status") or "")
+    return actual == expected
+
+
 _OPS: dict[str, Callable[[Any, dict[str, Any]], Any]] = {
     "var":      lambda args, ctx: _resolve_var(args, ctx),
     "==":       _binop(lambda a, b: a == b),
@@ -102,6 +131,12 @@ _OPS: dict[str, Callable[[Any, dict[str, Any]], Any]] = {
     "startswith": _binop(lambda a, b: str(a).startswith(str(b))),
     "endswith":   _binop(lambda a, b: str(a).endswith(str(b))),
     "truthy":     _is_truthy,
+    # Shorthand gate for chaining actions: only proceed when the previous
+    # action's status matches the specified value. Equivalent to:
+    # {"==": [{"var": "last.status"}, "<value>"]}
+    # Added for the Sunday trading-track rebuild workflow chain
+    # (dataset.build_trading → evolution.start with condition ok).
+    "last_action_status": _last_action_status,
 }
 
 

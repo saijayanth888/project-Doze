@@ -6,7 +6,8 @@ stays focused on the small/declarative kinds.
 """
 from __future__ import annotations
 
+from .dataset_build_trading import BuildTradingDataset
 from .publish_adapter_to_hf import PublishAdapterToHuggingFace
 from .publish_adapter_to_ollama import PublishAdapterToOllama
 
-__all__ = ["PublishAdapterToHuggingFace", "PublishAdapterToOllama"]
+__all__ = ["BuildTradingDataset", "PublishAdapterToHuggingFace", "PublishAdapterToOllama"]
