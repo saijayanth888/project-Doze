@@ -653,8 +653,25 @@ def build_graph(
         state["pareto_report"] = pareto.to_dict()
 
         if not parent or champion_avg <= 0.0:
-            state["decision"] = "promote"
-            state["decision_reason"] = "No prior champion — promoting initial generation"
+            # First generation: apply minimum-score gate before promoting.
+            # This gate closed the path for 4 garbage adapters published on
+            # 2026-05-17 that scored ~0.0 across all trading eval metrics.
+            # Any adapter below 0.30 average is producing noise and must not
+            # publish to Ollama. Override via MODELFORGE_MIN_FIRST_GEN_SCORE.
+            MIN_FIRST_GEN_SCORE = float(os.environ.get("MODELFORGE_MIN_FIRST_GEN_SCORE", "0.30"))
+            if child_avg < MIN_FIRST_GEN_SCORE:
+                state["decision"] = "discard"
+                state["decision_reason"] = (
+                    f"First-gen min-score gate: child_avg={child_avg:.4f} < "
+                    f"MIN_FIRST_GEN_SCORE={MIN_FIRST_GEN_SCORE}. "
+                    f"Adapter not promoted; no track.promoted event will fire."
+                )
+            else:
+                state["decision"] = "promote"
+                state["decision_reason"] = (
+                    f"First-gen min-score gate: child_avg={child_avg:.4f} >= "
+                    f"{MIN_FIRST_GEN_SCORE}. Promoting initial generation."
+                )
         elif pareto.promote:
             state["decision"] = "promote"
             state["decision_reason"] = pareto.reason
