@@ -327,10 +327,28 @@ class LoRATrainingBackend:
         t0 = time.perf_counter()
         logger.info("[lora-train] run=%s gen=%d base=%s out=%s", run_id, generation, base_model, output_dir)
 
+        # ── Device map: force single-device, no CPU offload ────────────
+        # ``device_map="auto"`` lets accelerate split a model across GPU +
+        # CPU (the "meta" device for offloaded params). On regular discrete-
+        # GPU machines that lets bigger models fit; on GB10 unified-memory
+        # hosts (CPU and GPU share one physical RAM pool) there is NO
+        # benefit — and the split causes autograd to fail with
+        #     "MmBackward0 returned an invalid gradient at index 1 —
+        #      expected device meta but got cuda:0"
+        # which we hit on 2026-05-17 at the very first backward pass of
+        # the first sequential training attempt with Hermes-3-Llama-3.1-8B.
+        # Force ``cuda:0`` so all params live on a single device. The
+        # RAM precheck above (evolution.start action) already refused any
+        # base model that wouldn't fit, so the OOM-vs-offload trade is
+        # already won at the precheck layer.
+        #
+        # MODELFORGE_DEVICE_MAP env var lets the operator re-enable
+        # multi-device splitting on hosts where that actually helps.
+        device_map = os.environ.get("MODELFORGE_DEVICE_MAP", "cuda:0")
         model = AutoModelForCausalLM.from_pretrained(
             base_model,
             torch_dtype="auto",
-            device_map="auto",
+            device_map=device_map,
         )
         tokenizer = AutoTokenizer.from_pretrained(base_model, use_fast=True)
         if tokenizer.pad_token is None:

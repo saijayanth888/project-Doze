@@ -147,7 +147,7 @@ async def _invoke_converter(
 
 
 async def _convert_to_gguf(
-    adapter_dir: Path, *, quantization: str = "q4_k_m",
+    adapter_dir: Path, *, quantization: str = "f16",
 ) -> tuple[Path | None, str]:
     """Best-effort GGUF conversion. Returns ``(gguf_path, message)``."""
     script = _resolve_convert_script()
@@ -233,7 +233,7 @@ async def _aiter_file_chunks(gguf_path: Path):
 
 
 async def _put_blob(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient,  # kept for ABI compat; unused — see note below
     base: str,
     gguf_path: Path,
     *,
@@ -242,28 +242,56 @@ async def _put_blob(
 ) -> tuple[bool, str, str]:
     """Stream a GGUF blob to Ollama, keyed by its sha256 digest.
 
-    Streamed via ``_iter_file_chunks`` to keep peak memory at one chunk
-    (8 MiB) rather than the full blob (5-15 GB for typical quantized
-    adapters on top of a Qwen3-30B / Llama-70B base). ``Content-Length``
-    is set explicitly so httpx doesn't auto-fall-back to chunked
-    transfer-encoding, which some Ollama versions reject.
+    HTTP client: aiohttp (NOT httpx). On Ollama 0.23.1 this endpoint
+    sends a response pattern that httpx.AsyncClient parses as
+    ``ReadError('')`` on every variant we tested (sync POST works, async
+    POST fails — streaming or full-body, http2 on or off, IPv4 alias or
+    bridge IP). aiohttp's response parser handles the same response
+    cleanly, returns 200. The other Ollama endpoints in this action
+    (/api/create, /api/copy, /api/delete) use httpx and work fine
+    because their responses are small JSON and don't trip the parser
+    edge case.
+    Audit 2026-05-17 — full repro in /tmp/blob_upload_isolation.py.
+
+    Function signature accepts the httpx client to keep the call site
+    in execute() unchanged (it passes the existing client we never use).
+    Streaming chunked transfer is preserved so peak memory stays at
+    one chunk (8 MiB) rather than the full blob (5-15 GB for typical
+    quantized adapters on top of a 30B+ base).
+
+    HTTP verb: POST. Ollama 0.23+ rejects PUT with 405 Method Not
+    Allowed — the documented method for /api/blobs/<digest> is POST.
     """
+    _ = client  # explicit acknowledgement that the param is unused
+
+    import aiohttp
     url = f"{base}/api/blobs/sha256:{digest}"
     headers = {
         "Content-Type": "application/octet-stream",
         "Content-Length": str(content_length),
     }
+
+    async def _aiohttp_chunks():
+        # aiohttp accepts an async iterable directly; same chunk size as
+        # the httpx variant for parity in network behaviour.
+        loop = asyncio.get_event_loop()
+        with gguf_path.open("rb") as fh:
+            while True:
+                chunk = await loop.run_in_executor(None, fh.read, _BLOB_CHUNK_BYTES)
+                if not chunk:
+                    return
+                yield chunk
+
     try:
-        resp = await client.put(
-            url,
-            content=_aiter_file_chunks(gguf_path),
-            headers=headers,
-        )
-    except httpx.RequestError as exc:
-        return False, digest, f"blob upload network error: {exc}"
-    if resp.status_code not in (200, 201):
-        return False, digest, f"blob upload HTTP {resp.status_code}: {resp.text[:200]}"
-    return True, digest, f"blob uploaded ({content_length / (1024**3):.2f} GiB)"
+        timeout = aiohttp.ClientTimeout(total=600)
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.post(url, data=_aiohttp_chunks(), headers=headers) as resp:
+                if resp.status not in (200, 201):
+                    body = (await resp.text())[:200]
+                    return False, digest, f"blob upload HTTP {resp.status}: {body}"
+                return True, digest, f"blob uploaded ({content_length / (1024 ** 3):.2f} GiB)"
+    except Exception as exc:
+        return False, digest, f"blob upload network error: {exc!r}"
 
 
 async def _create_model(
@@ -371,7 +399,7 @@ class PublishAdapterToOllama(Action):
         {
             "name": "quantization", "type": "string",
             "label": "GGUF quantization (only used if conversion runs)",
-            "default": "q4_k_m",
+            "default": "f16",
         },
     ]
 
@@ -432,7 +460,7 @@ class PublishAdapterToOllama(Action):
         gguf_path = _find_gguf(adapter_dir)
         conversion_note = "preexisting .gguf in adapter dir"
         if gguf_path is None:
-            quant = str(config.get("quantization") or "q4_k_m")
+            quant = str(config.get("quantization") or "f16")
             gguf_path, conversion_note = await _convert_to_gguf(
                 adapter_dir, quantization=quant,
             )
