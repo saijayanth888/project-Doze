@@ -238,6 +238,245 @@ DEFAULT_WORKFLOWS: list[dict[str, Any]] = [
             },
         ],
     },
+    # ── Sunday trading-track rebuild workflows (6 tracks, all disabled by default)
+    #
+    # Staggered 90 min apart so they don't all hammer the GPU simultaneously.
+    # Each workflow: dataset.build_trading → evolution.start (gated on ok) →
+    # notify.slack. Enable per-track explicitly via the dashboard once data
+    # accumulates to N_MIN (see Section D of the pipeline spec).
+    #
+    # Cron expressions use POSIX convention (0=Sun); engine.py translates.
+    # ──────────────────────────────────────────────────────────────────────────
+    {
+        "name": "Weekly trading-reflector rebuild",
+        "description": (
+            "Sunday 04:00 UTC — build the reflector dataset (closed stock trades) "
+            "then evolve. DISABLED: waiting for first closed stock trade. "
+            "Enable once N_MIN=100 records accumulate via the dashboard."
+        ),
+        "kind": "system",
+        "enabled": False,  # Waiting for first closed stock trade — enable once N_MIN=100 records accumulate
+        "trigger_type": "cron",
+        "trigger_config": {"cron": "0 4 * * 0"},  # Sunday 04:00 UTC
+        "condition": None,
+        "actions": [
+            {
+                "kind": "dataset.build_trading",
+                "config": {"track_id": "trading-reflector"},
+            },
+            {
+                "kind": "evolution.start",
+                "config": {
+                    "base_model": "NousResearch/Hermes-3-Llama-3.1-8B",
+                    "max_generations": 3, "max_samples": 500,
+                    "lora_rank": 16, "batch_size": 2, "learning_rate": 0.0002,
+                    "track_id": "trading-reflector",
+                    "eval_set_path": "{dataset.build_trading.test_set_path}",
+                },
+                "condition": {"last_action_status": "ok"},
+            },
+            {
+                "kind": "notify.slack",
+                "config": {
+                    "message": "Weekly trading-reflector rebuild: {dataset.build_trading.records_count} records. Run: {evolution.start.run_id}",
+                    "emoji": "📊",
+                    "event_type": "trading_rebuild",
+                },
+            },
+        ],
+    },
+    {
+        "name": "Weekly trading-bull rebuild",
+        "description": (
+            "Sunday 05:30 UTC — build the bull-analyst dataset and evolve. "
+            "Staggered +90 min from reflector. Disabled until N_MIN=100 "
+            "stock-only records pass the crypto-term blocklist."
+        ),
+        "kind": "system",
+        "enabled": False,
+        "trigger_type": "cron",
+        "trigger_config": {"cron": "30 5 * * 0"},  # Sunday 05:30 UTC
+        "condition": None,
+        "actions": [
+            {
+                "kind": "dataset.build_trading",
+                "config": {"track_id": "trading-bull"},
+            },
+            {
+                "kind": "evolution.start",
+                "config": {
+                    "base_model": "NousResearch/Hermes-3-Llama-3.1-8B",
+                    "max_generations": 3, "max_samples": 500,
+                    "lora_rank": 16, "batch_size": 2, "learning_rate": 0.0002,
+                    "track_id": "trading-bull",
+                    "eval_set_path": "{dataset.build_trading.test_set_path}",
+                },
+                "condition": {"last_action_status": "ok"},
+            },
+            {
+                "kind": "notify.slack",
+                "config": {
+                    "message": "Weekly trading-bull rebuild: {dataset.build_trading.records_count} records. Run: {evolution.start.run_id}",
+                    "emoji": "📊",
+                    "event_type": "trading_rebuild",
+                },
+            },
+        ],
+    },
+    {
+        "name": "Weekly trading-bear rebuild",
+        "description": (
+            "Sunday 07:00 UTC — build the bear-analyst dataset and evolve. "
+            "Staggered +90 min from bull. Disabled until N_MIN=100 "
+            "stock-only records pass the crypto-term blocklist."
+        ),
+        "kind": "system",
+        "enabled": False,
+        "trigger_type": "cron",
+        "trigger_config": {"cron": "0 7 * * 0"},  # Sunday 07:00 UTC
+        "condition": None,
+        "actions": [
+            {
+                "kind": "dataset.build_trading",
+                "config": {"track_id": "trading-bear"},
+            },
+            {
+                "kind": "evolution.start",
+                "config": {
+                    "base_model": "NousResearch/Hermes-3-Llama-3.1-8B",
+                    "max_generations": 3, "max_samples": 500,
+                    "lora_rank": 16, "batch_size": 2, "learning_rate": 0.0002,
+                    "track_id": "trading-bear",
+                    "eval_set_path": "{dataset.build_trading.test_set_path}",
+                },
+                "condition": {"last_action_status": "ok"},
+            },
+            {
+                "kind": "notify.slack",
+                "config": {
+                    "message": "Weekly trading-bear rebuild: {dataset.build_trading.records_count} records. Run: {evolution.start.run_id}",
+                    "emoji": "📊",
+                    "event_type": "trading_rebuild",
+                },
+            },
+        ],
+    },
+    {
+        "name": "Weekly trading-arbiter rebuild",
+        "description": (
+            "Sunday 08:30 UTC — build the arbiter dataset and evolve. "
+            "Staggered +90 min from bear. Disabled until N_MIN=100 records "
+            "(crypto arbiter rows may pass the blocklist — arbiter uses outcome/rationale prose)."
+        ),
+        "kind": "system",
+        "enabled": False,
+        "trigger_type": "cron",
+        "trigger_config": {"cron": "30 8 * * 0"},  # Sunday 08:30 UTC
+        "condition": None,
+        "actions": [
+            {
+                "kind": "dataset.build_trading",
+                "config": {"track_id": "trading-arbiter"},
+            },
+            {
+                "kind": "evolution.start",
+                "config": {
+                    "base_model": "NousResearch/Hermes-3-Llama-3.1-8B",
+                    "max_generations": 3, "max_samples": 500,
+                    "lora_rank": 16, "batch_size": 2, "learning_rate": 0.0002,
+                    "track_id": "trading-arbiter",
+                    "eval_set_path": "{dataset.build_trading.test_set_path}",
+                },
+                "condition": {"last_action_status": "ok"},
+            },
+            {
+                "kind": "notify.slack",
+                "config": {
+                    "message": "Weekly trading-arbiter rebuild: {dataset.build_trading.records_count} records. Run: {evolution.start.run_id}",
+                    "emoji": "📊",
+                    "event_type": "trading_rebuild",
+                },
+            },
+        ],
+    },
+    {
+        "name": "Weekly trading-regime-tagger rebuild",
+        "description": (
+            "Sunday 10:00 UTC — build the regime-tagger dataset and evolve. "
+            "Staggered +90 min from arbiter. N_MIN=40 (smaller — 7-class JSON classifier). "
+            "Disabled until sufficient regime-tagger records accumulate."
+        ),
+        "kind": "system",
+        "enabled": False,
+        "trigger_type": "cron",
+        "trigger_config": {"cron": "0 10 * * 0"},  # Sunday 10:00 UTC
+        "condition": None,
+        "actions": [
+            {
+                "kind": "dataset.build_trading",
+                "config": {"track_id": "trading-regime-tagger"},
+            },
+            {
+                "kind": "evolution.start",
+                "config": {
+                    "base_model": "NousResearch/Hermes-3-Llama-3.1-8B",
+                    "max_generations": 3, "max_samples": 500,
+                    "lora_rank": 16, "batch_size": 2, "learning_rate": 0.0002,
+                    "track_id": "trading-regime-tagger",
+                    "eval_set_path": "{dataset.build_trading.test_set_path}",
+                },
+                "condition": {"last_action_status": "ok"},
+            },
+            {
+                "kind": "notify.slack",
+                "config": {
+                    "message": "Weekly trading-regime-tagger rebuild: {dataset.build_trading.records_count} records. Run: {evolution.start.run_id}",
+                    "emoji": "📊",
+                    "event_type": "trading_rebuild",
+                },
+            },
+        ],
+    },
+    {
+        "name": "Weekly trading-indicator-selector rebuild",
+        "description": (
+            "Sunday 11:30 UTC — build the indicator-selector dataset and evolve. "
+            "Staggered +90 min from regime-tagger. N_MIN=40. "
+            "Requires SHARK_ENABLE_INDICATOR_SELECTOR=1 in shark phases AND "
+            "N_MIN=40 real indicator_selector agent calls to accumulate (2-4 days "
+            "of live Shark operation once the env var is set). Disabled until then."
+        ),
+        "kind": "system",
+        "enabled": False,  # Requires SHARK_ENABLE_INDICATOR_SELECTOR=1 AND N_MIN=40 records
+        "trigger_type": "cron",
+        "trigger_config": {"cron": "30 11 * * 0"},  # Sunday 11:30 UTC
+        "condition": None,
+        "actions": [
+            {
+                "kind": "dataset.build_trading",
+                "config": {"track_id": "trading-indicator-selector"},
+            },
+            {
+                "kind": "evolution.start",
+                "config": {
+                    "base_model": "NousResearch/Hermes-3-Llama-3.1-8B",
+                    "max_generations": 3, "max_samples": 500,
+                    "lora_rank": 16, "batch_size": 2, "learning_rate": 0.0002,
+                    "track_id": "trading-indicator-selector",
+                    "eval_set_path": "{dataset.build_trading.test_set_path}",
+                },
+                "condition": {"last_action_status": "ok"},
+            },
+            {
+                "kind": "notify.slack",
+                "config": {
+                    "message": "Weekly trading-indicator-selector rebuild: {dataset.build_trading.records_count} records. Run: {evolution.start.run_id}",
+                    "emoji": "📊",
+                    "event_type": "trading_rebuild",
+                },
+            },
+        ],
+    },
     # ── Trading eval failure alert (enabled by default; fires when eval
     #     infrastructure returns zero/negative scores, indicating stubs are
     #     active or the eval pipeline is broken). See runner.py. ─────────
