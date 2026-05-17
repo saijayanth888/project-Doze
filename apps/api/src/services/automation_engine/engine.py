@@ -45,6 +45,75 @@ except Exception as _exc:  # pragma: no cover
     logger.warning("APScheduler not installed (%s) — engine will no-op.", _exc)
 
 
+# ── POSIX-cron ↔ APScheduler day_of_week convention bridge ─────────────
+#
+# APScheduler's ``CronTrigger.from_crontab()`` parses 5-field crontab
+# expressions but interprets the day-of-week field as 0=Monday..6=Sunday,
+# **not** the POSIX-cron convention of 0=Sunday..6=Saturday. So a workflow
+# author who writes ``0 18 * * 0`` (POSIX "Sunday 18:00") silently gets
+# Monday 18:00 instead — exactly the bug behind 5 weeks of missed Sunday
+# Trading-LoRA fires on this deployment (audit 2026-05-17).
+#
+# Translate the dow field before handing the expression to APScheduler:
+#
+#   POSIX 0 (Sun) ─┐
+#   POSIX 7 (Sun) ─┴─→ APScheduler 6  (Sun)
+#   POSIX 1..6     →   APScheduler 0..5
+#
+# Named days (``sun``, ``mon``, …) are POSIX-faithful in APScheduler, so
+# they pass through unchanged. ``*`` and step expressions (``*/N``) are
+# left alone too — they don't carry the offset ambiguity.
+def _posix_cron_to_apscheduler(expr: str) -> str:
+    """Rewrite the day-of-week field of a 5-field POSIX cron string into
+    APScheduler's 0=Mon..6=Sun convention.
+
+    Returns the original expression unchanged on any parse difficulty so a
+    malformed input still surfaces inside APScheduler with its own error
+    rather than being silently mangled here.
+    """
+    parts = expr.strip().split()
+    if len(parts) != 5:
+        return expr  # 6-field "with seconds" + others: leave alone.
+    dow_field = parts[4]
+
+    def shift(token: str) -> str:
+        # Wildcard and empty pass through verbatim.
+        if not token or token == "*":
+            return token
+        # Named days (``sun`` / ``mon-fri`` / …) pass through too — APScheduler
+        # interprets day names with the POSIX convention already.
+        if any(ch.isalpha() for ch in token):
+            return token
+        # Step (e.g. */2) — semantic is "every Nth day", identical under
+        # either offset, so leave it alone.
+        if "/" in token:
+            return token
+        # Range a-b — translate each endpoint independently.
+        if "-" in token:
+            try:
+                a, b = token.split("-", 1)
+                return f"{_shift_one(a)}-{_shift_one(b)}"
+            except ValueError:
+                return token
+        # Plain digit.
+        try:
+            return _shift_one(token)
+        except ValueError:
+            return token
+
+    def _shift_one(s: str) -> str:
+        n = int(s)
+        if n in (0, 7):
+            return "6"  # Sunday in APScheduler
+        if 1 <= n <= 6:
+            return str(n - 1)
+        return s  # Out-of-range — let APScheduler reject it loudly.
+
+    rewritten = ",".join(shift(t) for t in dow_field.split(","))
+    parts[4] = rewritten
+    return " ".join(parts)
+
+
 # ── Module-level singleton ────────────────────────────────────────────
 
 _ENGINE: "AutomationEngine | None" = None
@@ -236,9 +305,10 @@ class AutomationEngine:
             return
         try:
             sched_id = f"wf:{wf_id}"
+            normalised = _posix_cron_to_apscheduler(cron_expr)
             self._scheduler.add_job(
                 self._run_workflow_by_id,
-                CronTrigger.from_crontab(cron_expr),
+                CronTrigger.from_crontab(normalised),
                 id=sched_id,
                 kwargs={"wf_id": wf_id, "trigger_kind": "cron", "payload": {}},
                 replace_existing=True,
