@@ -78,7 +78,7 @@ def test_reflector_returns_all_four_keys(tmp_path):
     _write_jsonl(test_set, [
         {
             "prompt": "Summarize trade AAPL closed at +$42.5 alpha.",
-            "realized_pnl": 42.5,
+            "realized_pnl_usd": 42.5,
             "forward_30d_return": 0.034,
             "predicted_direction": "long",
             "arbiter_prompt": "Should we re-enter AAPL?",
@@ -86,7 +86,7 @@ def test_reflector_returns_all_four_keys(tmp_path):
         },
         {
             "prompt": "Summarize trade TSLA closed at -$120.0 loss.",
-            "realized_pnl": -120.0,
+            "realized_pnl_usd": -120.0,
             "forward_30d_return": -0.07,
             "predicted_direction": "short",
             "arbiter_prompt": "Should we re-enter TSLA?",
@@ -417,7 +417,7 @@ def test_registry_dispatch_to_each_module(tmp_path):
     _write_jsonl(test_set, [
         {
             "prompt": "Sample prompt",
-            "realized_pnl": 10.0,
+            "realized_pnl_usd": 10.0,
             "forward_30d_return": 0.01,
             "forward_5d_pnl_usd": 100.0,
             "opponent_strongest_point": "RSI 22",

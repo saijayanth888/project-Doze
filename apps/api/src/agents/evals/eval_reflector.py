@@ -72,7 +72,8 @@ def score(  # noqa: PLR0913 -- six injectable hooks is the contract
     The test set is JSONL with one record per closed trade. Required fields:
 
     * ``prompt`` -- the same prompt template the reflector role gets at runtime
-    * ``realized_pnl`` -- gold-truth $ value of the closed trade
+    * ``realized_pnl_usd`` -- gold-truth USD value of the closed trade; null when
+      only a percent is available (skips faithfulness check for that record)
     * ``forward_30d_return`` -- realized return over the next 30 trading days
       (used by the predictive hit-rate metric only)
     * ``arbiter_prompt`` -- the prompt the trading-arbiter sees on the *next*
@@ -102,20 +103,29 @@ def score(  # noqa: PLR0913 -- six injectable hooks is the contract
     responses = runner(adapter_path, prompts)
 
     faithful_hits = 0
+    faithful_eligible = 0  # only records with a real USD value count
     rubric_scores: list[float] = []
     hit_count = 0
     eligible_for_hit = 0
 
     for record, response in zip(records, responses, strict=False):
         # -- faithfulness_regex -----------------------------------------
-        gold = record.get("realized_pnl")
-        cited = extract_first_dollar_value(response)
-        try:
-            gold_f = float(gold) if gold is not None else None
-        except (TypeError, ValueError):
-            gold_f = None
-        if values_match_to_decimal(cited, gold_f, decimals=1):
-            faithful_hits += 1
+        # Gate on realized_pnl_usd being non-null. Records where we only have
+        # a percent (or no ledger data) are skipped here — the denominator
+        # drops by 1 for each such record, matching the spec's null-handling
+        # policy. NO fabricated notional is used.
+        gold = record.get("realized_pnl_usd")
+        if gold is None:
+            pass  # skip faithfulness check for this record; don't count in denominator
+        else:
+            faithful_eligible += 1
+            cited = extract_first_dollar_value(response)
+            try:
+                gold_f = float(gold)
+            except (TypeError, ValueError):
+                gold_f = None
+            if values_match_to_decimal(cited, gold_f, decimals=1):
+                faithful_hits += 1
 
         # -- judge_score (1-5 rescaled to [0,1]) ------------------------
         raw = rs(record.get("prompt", ""), response, REFLECTOR_RUBRIC)
@@ -172,8 +182,11 @@ def score(  # noqa: PLR0913 -- six injectable hooks is the contract
         # doesn't farm the metric by always disagreeing.
         debate_impact = clamp01(change_rate / 0.30)
 
+    # faithfulness_regex denominator is faithful_eligible (records with real USD PnL),
+    # NOT len(records). Records where realized_pnl_usd is null are exempt from
+    # the dollar-citation check — the model correctly cannot cite what isn't there.
     scores: dict[str, float] = {
-        "faithfulness_regex": rate(faithful_hits, len(records)),
+        "faithfulness_regex": rate(faithful_hits, faithful_eligible),
         "judge_score": clamp01(mean(rubric_scores)),
         "debate_impact": clamp01(debate_impact),
         "predictive_hit_rate_30d": rate(hit_count, eligible_for_hit),
