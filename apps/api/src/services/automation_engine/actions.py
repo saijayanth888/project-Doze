@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -41,6 +42,74 @@ import httpx
 from config.settings import settings
 
 logger = logging.getLogger("modelforge.automation.actions")
+
+
+# ── RAM precheck for evolution.start ──────────────────────────────────
+#
+# Estimate fp16 base-model memory footprint from the base_model string,
+# compare against available RAM, and refuse with an actionable error if
+# the math doesn't work. Reused by EvolutionStart.execute() so the
+# operator doesn't burn 10+ minutes downloading weights only to get
+# SIGKILL'd at 65% of weight-load (the 2026-05-17 OOM pattern).
+#
+# The parameter-count heuristic is regex-based: match a "<N>B" or
+# "<N>b" token in the base_model string. Examples that work:
+#   "Qwen/Qwen3-30B-..."          → 30 B
+#   "qwen3:30b"                    → 30 B
+#   "NousResearch/Hermes-3-Llama-3.1-8B" → 8 B (last match wins → "1" then "8B")
+#   "meta-llama/Llama-3.2-3B"      → 3 B
+# When no NB token is present we fall back to 8 B (conservative middle-
+# ground). The operator can always set MODELFORGE_RAM_PRECHECK=0 to
+# skip the check for one-off experiments.
+
+_PARAM_BILLIONS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[Bb](?![a-zA-Z])")
+
+
+def _estimate_params_billions(base_model: str) -> float:
+    """Heuristic parameter-count extraction from a model name string."""
+    matches = _PARAM_BILLIONS_RE.findall(base_model or "")
+    if not matches:
+        return 8.0
+    # Pick the LARGEST number — for "Llama-3.1-8B" the "1" and "8" are
+    # both candidates; the model size is clearly the 8, not the version.
+    return max(float(m) for m in matches)
+
+
+def _check_ram_for_base_model(base_model: str) -> "ActionResult | None":
+    """Return an error ActionResult if free RAM can't host LoRA training
+    on the named base. Return None to allow the run."""
+    if os.environ.get("MODELFORGE_RAM_PRECHECK", "1") == "0":
+        return None
+    params_b = _estimate_params_billions(base_model)
+    required_gb = (params_b * 2.0) * 1.3 + 10.0
+    try:
+        import psutil  # type: ignore[import-not-found]
+        free_gb = psutil.virtual_memory().available / (1024 ** 3)
+    except Exception as exc:
+        # If we can't read RAM we can't enforce — log + allow rather than
+        # block the entire pipeline on a psutil import failure.
+        logger.warning("[ram-precheck] psutil unavailable (%s) — skipping check", exc)
+        return None
+    if free_gb < required_gb:
+        return ActionResult(
+            status="error",
+            error="insufficient_ram",
+            message=(
+                f"RAM precheck failed: {free_gb:.1f} GB available, "
+                f"need {required_gb:.1f} GB for an estimated {params_b:.0f}B "
+                f"parameter base ({base_model!r}). "
+                "Rule: free_gb >= params_B * 2 * 1.3 + 10. "
+                "Pick a smaller base_model or set MODELFORGE_RAM_PRECHECK=0 "
+                "to override (not recommended on this host)."
+            ),
+            output={
+                "base_model": base_model,
+                "params_billions": params_b,
+                "free_gb": round(free_gb, 1),
+                "required_gb": round(required_gb, 1),
+            },
+        )
+    return None
 
 
 # ── Templating ─────────────────────────────────────────────────────────
@@ -219,6 +288,23 @@ class EvolutionStart(Action):
                 )
         except Exception:
             pass
+
+        # ── RAM precheck (audit 2026-05-17) ─────────────────────────────
+        # The training worker downloads the fp16 base from HuggingFace and
+        # loads it into RAM (the GB10 host is unified memory — RAM IS GPU
+        # memory). On 2026-05-17 all 5 trading workflows pinned to
+        # qwen3:30b OOM-killed the worker (~60 GB fp16 + ~50 GB resident
+        # services > 88 GB mf-api cgroup limit). Block bad bases before
+        # any HF download burns bandwidth.
+        #
+        # Formula (per right-sizing analysis 2026-05-17):
+        #     required_gb = params_B * 2 * 1.3 + 10
+        # The 2 is fp16 bytes/param. The 1.3 is empirical activation +
+        # gradient + optimizer overhead for LoRA at batch_size=2. The 10
+        # is a fixed framework / staging buffer.
+        ram_check = _check_ram_for_base_model(str(config.get("base_model") or ""))
+        if ram_check is not None:
+            return ram_check
 
         run_id = f"run-{uuid4().hex[:8]}"
         run_config = {k: v for k, v in config.items() if v is not None}

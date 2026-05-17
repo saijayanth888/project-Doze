@@ -43,3 +43,10 @@ sentence-transformers>=3.0.0
 # native deps). Transitively pulled by transformers, but pinned here so
 # version drift can't silently break the upload path.
 huggingface_hub>=1.0.0,<2
+# gguf — the pure-Python binary-format library that llama.cpp's
+# convert_lora_to_gguf.py imports. Adding this lets us bundle the
+# llama.cpp converter into the image so adapter.publish_ollama actually
+# produces a GGUF LoRA on demand. Audit 2026-05-17: publish action was
+# silently returning status="skipped" for 4+ days because the converter
+# was missing from the container.
+gguf>=0.10.0
