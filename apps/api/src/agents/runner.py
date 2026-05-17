@@ -129,8 +129,28 @@ async def _maybe_promote_to_tracks(
         if not targets:
             continue
         new_avg = _avg_subset(child_scores, targets)
-        if new_avg is None or new_avg <= 0:
-            # No usable scores for this track's benches — skip.
+        if new_avg is None:
+            # Run didn't target this track's benchmarks — expected for non-trading runs. Skip silently.
+            continue
+        if new_avg <= 0:
+            # Scores exist but are zero/negative — eval infrastructure failure
+            # (stubs still active, metric broken, or insufficient test data).
+            logger.error(
+                "[track] %s skipped promotion: new_avg=%.4f <= 0 for benchmarks=%s. "
+                "This indicates eval stubs are active or all metrics returned 0. "
+                "Check MODELFORGE_EVAL_USE_PEFT removal and judge wiring.",
+                track.get("track_id"), new_avg, targets,
+            )
+            _emit_event("track.eval_failed", {
+                "track_id": track.get("track_id"),
+                "track_name": track.get("name"),
+                "run_id": run_id,
+                "generation": int(generation),
+                "new_avg": round(new_avg, 4),
+                "target_benchmarks": targets,
+                "child_scores": dict(child_scores),
+                "reason": "eval_score_zero_or_negative",
+            })
             continue
         prev_scores = track.get("champion_scores") or {}
         prev_avg = _avg_subset(prev_scores, targets) if prev_scores else None

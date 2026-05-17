@@ -238,6 +238,36 @@ DEFAULT_WORKFLOWS: list[dict[str, Any]] = [
             },
         ],
     },
+    # ── Trading eval failure alert (enabled by default; fires when eval
+    #     infrastructure returns zero/negative scores, indicating stubs are
+    #     active or the eval pipeline is broken). See runner.py. ─────────
+    {
+        "name": "Trading Eval Failure Alert",
+        "description": (
+            "Fires on track.eval_failed — emitted when a trading track's eval scores "
+            "are zero or negative, indicating broken eval infrastructure (stubs active, "
+            "judge not wired, or insufficient data). Enabled by default so operators "
+            "are alerted immediately rather than silently swallowing zero-score runs."
+        ),
+        "kind": "system",
+        "enabled": True,
+        "trigger_type": "event",
+        "trigger_config": {"pattern": "track.eval_failed"},
+        "condition": None,
+        "actions": [
+            {
+                "kind": "notify.slack",
+                "config": {
+                    "message": (
+                        "Trading eval failure: track={track_id} run={run_id} "
+                        "gen={generation} avg={new_avg} reason={reason}"
+                    ),
+                    "emoji": "🚨",
+                    "event_type": "track_eval_failed",
+                },
+            },
+        ],
+    },
 ]
 
 
