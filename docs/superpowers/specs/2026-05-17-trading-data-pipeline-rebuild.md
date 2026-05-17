@@ -1,7 +1,7 @@
 # Trading Data + Eval Pipeline — Complete Structural Rebuild
 
 **Date:** 2026-05-17
-**Status:** BINDING (rev2, post-critic) — builder implements verbatim; no scope creep; no unimplemented sections
+**Status:** BINDING (rev3, post-empirical) — builder implements verbatim; no scope creep; no unimplemented sections
 **Operator constraints:** no band-aids, no fake/synthetic data, no silent failures, every code path tested
 
 **Rev2 changes:** Removed $10k notional fudge (writes null instead); added crypto-term contamination filter for bull/bear; fixed N_MIN literature cite (8B not 3B); added evolution_graph.py:655 first-gen min-score gate; added explicit container subprocess env spec; added garbage-adapter cleanup section (Section L); replaced "independently reversible" with dependency matrix; fixed 524-ticker arithmetic.
@@ -45,10 +45,14 @@ The other five tracks have 28 real llm-calls.jsonl records and the 29k `quanta_s
 - Same as bull. Source `debate["bear"]` and `llm-calls.jsonl` agent=`risk_debate.conservative`. Same crypto-term blocklist applies.
 
 **trading-arbiter:**
-- Decision: Option (iii) — bootstrap from `quanta_schema.decisions`. The `outcome TEXT` + `rationale TEXT` + `debate JSONB` provide the full context for arbiter training. Supplement with `llm-calls.jsonl` agent=`risk_debate.neutral` / `research_manager` / `debate_orchestrator`.
+- Decision (rev3 — post-bootstrap empirical finding 2026-05-17 23:30Z): FAIL until N_MIN=100 stock-side arbiter decisions accumulate in `llm-calls.jsonl`. Do NOT bootstrap from `quanta_schema.decisions`.
+- Why: empirical inspection of the table proves it is operational gate telemetry, NOT a debate transcript. `debate JSONB` carries `{ts, close, regime, verdict}` only — no bull/bear prose. `outcome` has 5 enum values (`ERROR | RG_BLOCKED | SELL | BUY | FLAT`). `rationale` is one sentence (`"no signal; regime=trending_up"`). All `symbol` values are crypto pairs (`BTC/USD`, `XRP/USD`). Bootstrapping would teach the arbiter to output crypto-ticker JSON — same asset contamination that the bull/bear blocklist prevents structurally.
 
 **trading-regime-tagger:**
-- Use 8 existing `regime_tagger` llm-calls.jsonl records. Supplement from `quanta_schema.decisions.strategy` column → `RegimeLabel` enum mapping:
+- Decision (rev3 — post-bootstrap empirical finding 2026-05-17 23:30Z): FAIL until N_MIN=40 stock-side regime-tagger calls accumulate in `llm-calls.jsonl`. Do NOT bootstrap from `quanta_schema.decisions`.
+- Why: empirical inspection shows the bootstrap produces records where the prompt is literally `Symbol: BTC/USD\nStrategy: mean_rev_bb` and the response is `{"regime": "ranging"}`. The only signal is the strategy field, and the strategy→regime mapping is the same deterministic table we already implemented in `STRATEGY_TO_REGIME`. Training a LoRA on this would produce a model that memorises a pure function we already have in code — `agreement_with_baseline` would score ~1.0 by tautology, not learning. That is exactly the theatrical-metric trap this whole campaign exists to prevent.
+- Original (rev2) text retained for reference:
+  - Use 8 existing `regime_tagger` llm-calls.jsonl records. Supplement from `quanta_schema.decisions.strategy` column → `RegimeLabel` enum mapping:
   - `meta_up_regime` → `trending_up`
   - `meta_down_regime` → `trending_down`
   - `bb_squeeze` → `ranging`
