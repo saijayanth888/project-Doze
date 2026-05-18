@@ -329,33 +329,46 @@ class BuildTradingDataset(Action):
 
         curator_status = str(result.get("status") or "").strip()
         if curator_status != "ok":
-            # Map the curator's own status codes to descriptive error codes so
-            # the downstream condition gate and Slack alert have actionable info.
-            error_code = (
-                "curator_result_insufficient_data"
-                if curator_status == "insufficient_data"
-                else "curator_result_error"
-            )
             accept_count = int(result.get("accept_count") or 0)
             reject_reasons = result.get("reject_reasons") or {}
+            common_output = {
+                "track_id": track_id,
+                "curator_status": curator_status,
+                "accept_count": accept_count,
+                "reject_count": int(result.get("reject_count") or 0),
+                "reject_reasons": reject_reasons,
+                "records_count": accept_count,  # convenience alias
+            }
+            if curator_status == "insufficient_data":
+                # Insufficient data is a DESIGNED outcome of the data gate — not
+                # an error. Returning ``status="skipped"`` lets the workflow
+                # runner continue to subsequent conditional steps (e.g.
+                # ``notify.slack`` gated on ``last_action_status=skipped``) so
+                # the Sunday workflow can send a fail-loud Slack alert without
+                # the runner halting at this step. Returning ``status="error"``
+                # here previously caused the runner to break the action loop,
+                # which silenced the downstream insufficient-data Slack ping.
+                return ActionResult(
+                    status="skipped",
+                    message=(
+                        f"Insufficient data for {track_id}: "
+                        f"accept_count={accept_count}, "
+                        f"reject_reasons={reject_reasons}. "
+                        f"N_MIN gate held. No training will fire."
+                    ),
+                    output=common_output,
+                )
+            # Genuine errors (unparseable curator_result.json, curator process
+            # crash with non-ok-non-insufficient_data status) still halt.
             return ActionResult(
                 status="error",
-                error=error_code,
+                error="curator_result_error",
                 message=(
-                    f"Curator returned status={curator_status!r} for track_id={track_id!r}. "
-                    f"accept_count={accept_count}. "
-                    f"reject_reasons={reject_reasons}. "
-                    f"N_MIN not met or data pipeline error. "
-                    f"This is expected until sufficient real records accumulate."
+                    f"Curator returned unexpected status={curator_status!r} for "
+                    f"track_id={track_id!r}. accept_count={accept_count}, "
+                    f"reject_reasons={reject_reasons}."
                 ),
-                output={
-                    "track_id": track_id,
-                    "curator_status": curator_status,
-                    "accept_count": accept_count,
-                    "reject_count": int(result.get("reject_count") or 0),
-                    "reject_reasons": reject_reasons,
-                    "records_count": accept_count,  # convenience alias
-                },
+                output=common_output,
             )
 
         # 6. Success.
