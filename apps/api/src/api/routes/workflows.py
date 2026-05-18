@@ -197,7 +197,44 @@ async def delete_workflow(workflow_id: str, db: LineageDB = Depends(get_db)) -> 
 
 
 @router.post("/workflows/{workflow_id}/trigger")
-async def trigger_workflow(workflow_id: str, body: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+async def trigger_workflow(
+    workflow_id: str,
+    body: dict[str, Any] | None = Body(default=None),
+    force: bool = Query(
+        default=False,
+        description=(
+            "Allow manual trigger even when the workflow is disabled. Operators "
+            "use ``?force=true`` to dry-run a disabled workflow for debugging. "
+            "Defaults to False so the dashboard's Run-Now button can't accidentally "
+            "fire a workflow the operator explicitly turned off."
+        ),
+    ),
+    db: LineageDB = Depends(get_db),
+) -> dict[str, Any]:
+    """Manual fire. Honours the ``enabled`` flag by default.
+
+    Prior behaviour: manual triggers ran regardless of ``enabled``. This
+    surprised operators who disabled a workflow expecting all firing paths
+    (cron + manual) to stop. Fixed 2026-05-18 — manual now refuses unless
+    ``?force=true`` is passed.
+    """
+    wf = await db.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    if not wf.get("enabled") and not force:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "workflow_disabled",
+                "workflow_id": workflow_id,
+                "workflow_name": wf.get("name"),
+                "message": (
+                    "Workflow is disabled. Re-enable it (PUT /workflows/{id} "
+                    "with body {\"enabled\": true}) or pass ?force=true to "
+                    "trigger anyway for one-off debugging."
+                ),
+            },
+        )
     eng = _engine_or_503()
     summary = await eng.trigger_workflow(workflow_id, payload=(body or {}), trigger_kind="manual")
     if summary is None:
